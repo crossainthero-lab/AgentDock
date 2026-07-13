@@ -1,0 +1,53 @@
+{
+  "name": "agentdock",
+  "version": "0.1.0",
+  "description": "A simple desktop interface for running Claude Code, Codex, and Antigravity coding agents on your local projects.",
+  "main": "./out/main/index.js",
+  "author": "AgentDock",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "vitest run",
+    "rebuild:native": "electron-rebuild -f -w node-pty",
+    "native:check": "node scripts/native-check.js",
+    "test:pty": "node scripts/pty-smoke-runner.js",
+    "package": "npm run build && electron-builder --dir"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/headless": "^6.0.0",
+    "@xterm/xterm": "^5.5.0",
+    "framer-motion": "^11.15.0",
+    "lucide-react": "^0.469.0",
+    "node-pty": "^1.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sql.js": "^1.12.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.6.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.10.5",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/sql.js": "^1.4.9",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "esbuild@0.21.5": true,
+    "node-pty@1.1.0": true
+  }
+}

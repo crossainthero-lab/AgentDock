@@ -1,0 +1,45 @@
+.ad-handoff {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.ad-handoff__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+}
+
+.ad-handoff__field select,
+.ad-handoff__field textarea {
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  resize: vertical;
+  font-family: inherit;
+}
+.ad-handoff__field select:focus,
+.ad-handoff__field textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.ad-handoff__summary-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
+}
+
+.ad-handoff__warning {
+  font-size: 12px;
+  color: var(--color-warning);
+  margin-top: -6px;
+}

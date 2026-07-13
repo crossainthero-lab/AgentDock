@@ -1,0 +1,30 @@
+.ad-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.ad-badge--neutral {
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+}
+.ad-badge--accent {
+  background: var(--color-bg-selected);
+  color: var(--color-accent);
+}
+.ad-badge--success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+.ad-badge--warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+.ad-badge--danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}

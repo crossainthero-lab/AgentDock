@@ -1,0 +1,36 @@
+.ad-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.ad-icon-btn--sm {
+  width: 26px;
+  height: 26px;
+}
+
+.ad-icon-btn--md {
+  width: 30px;
+  height: 30px;
+}
+
+.ad-icon-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.ad-icon-btn--active {
+  background: var(--color-bg-selected);
+  color: var(--color-accent);
+}
+
+.ad-icon-btn:disabled {
+  opacity: 0.4;
+}

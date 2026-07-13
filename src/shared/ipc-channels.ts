@@ -1,0 +1,53 @@
+// Channel name constants shared by main (registration), preload (bridging),
+// and renderer (never used directly — only through window.agentDock).
+
+export const IpcChannels = {
+  workspaceOpen: 'workspace:open',
+  workspaceList: 'workspace:list',
+  workspaceGetCurrent: 'workspace:getCurrent',
+  workspaceClose: 'workspace:close',
+
+  agentsList: 'agents:list',
+  agentsDetect: 'agents:detect',
+  agentsSetCustomPath: 'agents:setCustomPath',
+  agentsGetCapabilities: 'agents:getCapabilities',
+
+  sessionCreate: 'session:create',
+  sessionList: 'session:list',
+  sessionGet: 'session:get',
+  sessionSendPrompt: 'session:sendPrompt',
+  sessionInterrupt: 'session:interrupt',
+  sessionStop: 'session:stop',
+  sessionDelete: 'session:delete',
+  sessionEvent: 'session:event',
+  sessionRespondInteraction: 'session:respondInteraction',
+  sessionSetModel: 'session:setModel',
+  sessionRunCommand: 'session:runCommand',
+
+  gitChangedFiles: 'git:changedFiles',
+  gitDiff: 'git:diff',
+  gitBranch: 'git:branch',
+  gitRevertFile: 'git:revertFile',
+
+  approvalsRespond: 'approvals:respond',
+  approvalsRequest: 'approvals:request',
+
+  settingsGet: 'settings:get',
+  settingsUpdate: 'settings:update',
+  settingsDiagnostics: 'settings:diagnostics',
+
+  terminalWrite: 'terminal:write',
+  terminalResize: 'terminal:resize',
+  terminalInterrupt: 'terminal:interrupt',
+  terminalData: 'terminal:data',
+  terminalExit: 'terminal:exit',
+
+  handoffGenerateSummary: 'handoff:generateSummary',
+  handoffExecute: 'handoff:execute',
+
+  windowMinimize: 'window:minimize',
+  windowMaximize: 'window:maximize',
+  windowClose: 'window:close',
+  windowIsMaximized: 'window:isMaximized',
+  windowMaximizeChange: 'window:maximizeChange'
+} as const

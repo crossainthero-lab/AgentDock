@@ -1,0 +1,33 @@
+.ad-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  max-width: 360px;
+  margin: 0 auto;
+  padding: var(--space-6);
+}
+
+.ad-empty-state__icon {
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--space-2);
+}
+
+.ad-empty-state__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.ad-empty-state__description {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.ad-empty-state__action {
+  margin-top: var(--space-3);
+  display: flex;
+  gap: var(--space-2);
+}

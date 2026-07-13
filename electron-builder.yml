@@ -1,0 +1,26 @@
+appId: com.agentdock.app
+productName: AgentDock
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  - '**/*.node'
+  - 'node_modules/node-pty/build/Release/**'
+  - 'node_modules/node-pty/prebuilds/**'
+win:
+  target: nsis
+  # Avoids electron-builder fetching winCodeSign (needed only for exe
+  # resource/signature editing) — on this machine extracting that archive
+  # fails because non-elevated Windows accounts lack the privilege to
+  # create the symlinks it contains. We don't code-sign, so this is safe.
+  signAndEditExecutable: false
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+linux:
+  target: AppImage
+  category: Development
+npmRebuild: false
