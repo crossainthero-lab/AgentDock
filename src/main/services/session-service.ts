@@ -169,15 +169,22 @@ export const sessionService = {
 
   respondToInteraction(sessionId: string, interactionId: string, optionId: string): void {
     const pending = pendingInteractions.get(sessionId)
-    if (pending && pending.interactionId === interactionId) {
-      const option = pending.options.find((o) => o.id === optionId)
-      messageRepo.add(sessionId, 'system', {
-        kind: 'interaction-record',
-        prompt: pending.prompt,
-        choiceLabel: option?.label ?? optionId
-      })
-      pendingInteractions.delete(sessionId)
-    }
+    // If this interaction is already gone (answered once already, or never
+    // matched what's actually pending) this must be a stale/duplicate
+    // submission — a double-click, or a UI race between the renderer's
+    // optimistic clear and this IPC call landing. Skip the PTY write too,
+    // not just the message record, so a second click can't re-send input
+    // (e.g. a second "y\r" or a second arrow-menu overshoot) into the live
+    // CLI once the interaction has already been consumed.
+    if (!pending || pending.interactionId !== interactionId) return
+
+    const option = pending.options.find((o) => o.id === optionId)
+    messageRepo.add(sessionId, 'system', {
+      kind: 'interaction-record',
+      prompt: pending.prompt,
+      choiceLabel: option?.label ?? optionId
+    })
+    pendingInteractions.delete(sessionId)
     running.get(sessionId)?.handle.respondToInteraction(interactionId, optionId)
   },
 

@@ -70,7 +70,10 @@ export function detectGenericInteraction(lines: string[]): GenericInteractionGue
       options.push({ id: m[1], label: m[2].trim() })
     }
     if (options.length >= 2) {
-      const isPermissionShaped = /permission required|do you want to|do you trust/i.test(joined)
+      // "would you like to" confirmed against a real captured Codex sandbox-
+      // retry approval ("Would you like to make the following edits?") —
+      // Codex doesn't use "do you want to" for this, unlike Claude.
+      const isPermissionShaped = /permission required|do you want to|do you trust|would you like to/i.test(joined)
       return {
         kind: isPermissionShaped ? 'permission' : 'choice',
         prompt: findPromptLine(tail, 'Choose an option'),

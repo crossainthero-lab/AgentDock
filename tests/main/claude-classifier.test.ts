@@ -28,6 +28,22 @@ describe('ClaudeClassifier', () => {
     ])
   })
 
+  it('preserves a code block\'s indentation in a multi-line reply instead of flattening every continuation line', () => {
+    const classifier = new ClaudeClassifier()
+    const events = classifier.classify(
+      snapshot([
+        'claude: Here is the function:',
+        'def foo():',
+        '    return 1',
+        'Brewed for 3s',
+        ''
+      ])
+    )
+    expect(events).toEqual([
+      { type: 'assistant_message', text: 'Here is the function:\ndef foo():\n    return 1' }
+    ])
+  })
+
   it('turns a "tool: <Name> (<args>)" line into a tool_activity event, plus the "Running…" status as activity', () => {
     const classifier = new ClaudeClassifier()
     const events = classifier.classify(snapshot(['tool: Bash (echo hello-from-claude)', 'Running…', '']))

@@ -107,7 +107,11 @@ export class ClaudeClassifier {
         const parts = [claudeMatch[1]]
         let j = i + 1
         while (j < lines.length && !isBoundaryLine(lines[j])) {
-          parts.push(lines[j].trim())
+          // Not .trim() — TerminalScreenBuffer already strips trailing
+          // padding per line (xterm's translateToString(true)), so any
+          // leading whitespace still present here is real content (e.g. a
+          // code block's indentation), not terminal padding to discard.
+          parts.push(lines[j])
           j += 1
         }
         const text = parts.join('\n').trim()

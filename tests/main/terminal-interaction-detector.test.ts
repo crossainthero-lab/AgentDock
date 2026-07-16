@@ -44,6 +44,17 @@ describe('detectGenericInteraction', () => {
     expect(guess?.kind).toBe('permission')
   })
 
+  it('classifies a numbered menu mentioning "would you like to" as permission-shaped (real captured Codex sandbox-retry wording)', () => {
+    const guess = detectGenericInteraction([
+      'Would you like to make the following edits?',
+      'Reason: command failed; retry without sandbox?',
+      '1. Yes, proceed (y)',
+      "2. Yes, and don't ask again for these files (a)",
+      '3. No, and tell Codex what to do differently (esc)'
+    ])
+    expect(guess?.kind).toBe('permission')
+  })
+
   it('detects a y/n confirmation', () => {
     const guess = detectGenericInteraction(['Continue? (y/n)', 'y. Yes', 'n. No'])
     expect(guess).toEqual({

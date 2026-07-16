@@ -57,4 +57,22 @@ describe('TerminalScreenBuffer', () => {
     await wait(20)
     expect(buf.snapshot().lines).toEqual(['only line'])
   })
+
+  it('strips ANSI color (SGR) codes, leaving plain text', async () => {
+    const buf = new TerminalScreenBuffer(80, 24)
+    buf.write('\x1b[31mred text\x1b[0m and \x1b[1;32mbold green\x1b[0m\r\n')
+    await wait(20)
+    expect(buf.snapshot().lines).toEqual(['red text and bold green'])
+  })
+
+  it('resolves an ANSI escape sequence split across chunks instead of corrupting the output', async () => {
+    const buf = new TerminalScreenBuffer(80, 24)
+    // The SGR sequence for red (\x1b[31m) split mid-sequence across two
+    // separate write() calls — real PTY output has no guarantee an escape
+    // sequence lands whole in a single chunk.
+    buf.write('\x1b[3')
+    buf.write('1mHello\x1b[0m\r\n')
+    await wait(20)
+    expect(buf.snapshot().lines).toEqual(['Hello'])
+  })
 })

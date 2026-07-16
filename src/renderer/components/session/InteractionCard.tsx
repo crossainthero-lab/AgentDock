@@ -1,4 +1,5 @@
 import type React from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, KeyRound, ShieldQuestion, Terminal as TerminalIcon } from 'lucide-react'
 import type { PendingInteraction } from '@shared/events/AgentEventReducer'
 import { Button } from '../ui/Button'
@@ -18,6 +19,19 @@ function isNegativeOption(label: string): boolean {
  *  detected prompt plus real buttons wired to the same live PTY session, or
  *  the fallback card when AgentDock couldn't safely translate it. */
 export function InteractionCard({ interaction, onRespond, onOpenTerminal }: InteractionCardProps): React.JSX.Element {
+  // Belt-and-suspenders against a double-click or double-fire re-sending the
+  // answer twice into the live PTY — the authoritative guard lives in
+  // sessionService.respondToInteraction, this just stops the second click
+  // from ever reaching it while this same card is still visible mid-transition.
+  const [answered, setAnswered] = useState(false)
+  useEffect(() => setAnswered(false), [interaction])
+
+  function respondOnce(interactionId: string, optionId: string): void {
+    if (answered) return
+    setAnswered(true)
+    onRespond(interactionId, optionId)
+  }
+
   if (interaction.kind === 'terminal_attention') {
     return (
       <div className="ad-interaction-card ad-interaction-card--attention">
@@ -66,7 +80,8 @@ export function InteractionCard({ interaction, onRespond, onOpenTerminal }: Inte
             variant={isNegativeOption(option.label) ? 'secondary' : 'primary'}
             size="sm"
             title={option.description}
-            onClick={() => onRespond(interaction.interactionId, option.id)}
+            disabled={answered}
+            onClick={() => respondOnce(interaction.interactionId, option.id)}
           >
             {option.label}
           </Button>
