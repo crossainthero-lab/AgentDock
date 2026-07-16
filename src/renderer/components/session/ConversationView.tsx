@@ -1,7 +1,7 @@
 import type React from 'react'
 import { useEffect, useRef } from 'react'
 import { MessageSquare } from 'lucide-react'
-import type { SessionMessage } from '@shared/types'
+import type { ChatItem } from '@shared/events/AgentEventReducer'
 import type { PendingInteraction } from '@shared/events/AgentEventReducer'
 import { MessageBubble } from './MessageBubble'
 import { ActivityGroup } from './ActivityGroup'
@@ -11,13 +11,13 @@ import type { ActivityItem } from './activity'
 import { EmptyState } from '../ui/EmptyState'
 import './ConversationView.css'
 
-type TimelineItem =
-  | { kind: 'message'; message: SessionMessage }
-  | { kind: 'activity-group'; items: ActivityItem[] }
-  | { kind: 'pending-text'; text: string }
+type TimelineEntry = { kind: 'item'; item: ChatItem } | { kind: 'activity-group'; items: ActivityItem[] }
 
-function buildTimeline(messages: SessionMessage[], pendingText: string): TimelineItem[] {
-  const timeline: TimelineItem[] = []
+/** One ordered list, sourced entirely from the session store's `items` — no
+ *  second, disjoint "pending text" render path exists anymore (that used to
+ *  duplicate the just-persisted assistant reply; see AgentEventReducer.ts). */
+function buildTimeline(items: ChatItem[]): TimelineEntry[] {
+  const timeline: TimelineEntry[] = []
   let group: ActivityItem[] = []
 
   const flush = (): void => {
@@ -27,57 +27,46 @@ function buildTimeline(messages: SessionMessage[], pendingText: string): Timelin
     }
   }
 
-  for (const message of messages) {
-    if (message.role === 'assistant' && message.content.kind === 'activity') {
-      group.push({
-        id: message.id,
-        tool: message.content.tool,
-        input: null,
-        detail: message.content.detail,
-        isError: message.content.isError,
-        status: 'done'
-      })
+  for (const item of items) {
+    if (item.kind === 'tool-activity') {
+      group.push({ id: item.id, tool: item.tool, input: null, detail: item.detail, isError: item.isError, status: 'done' })
     } else {
       flush()
-      timeline.push({ kind: 'message', message })
+      timeline.push({ kind: 'item', item })
     }
   }
   flush()
-
-  if (pendingText.trim()) {
-    timeline.push({ kind: 'pending-text', text: pendingText })
-  }
 
   return timeline
 }
 
 interface ConversationViewProps {
-  messages: SessionMessage[]
-  pendingText: string
+  items: ChatItem[]
   activityLabel: string | null
   pendingInteraction: PendingInteraction | null
   agentLabel: string
   onRespondInteraction: (interactionId: string, optionId: string) => void
+  onRetryMessage: (userMessageId: string) => void
   onOpenTerminal: () => void
 }
 
 export function ConversationView({
-  messages,
-  pendingText,
+  items,
   activityLabel,
   pendingInteraction,
   agentLabel,
   onRespondInteraction,
+  onRetryMessage,
   onOpenTerminal
 }: ConversationViewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const timeline = buildTimeline(messages, pendingText)
+  const timeline = buildTimeline(items)
 
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
-  }, [timeline.length, pendingText, activityLabel, pendingInteraction])
+  }, [timeline.length, activityLabel, pendingInteraction])
 
   if (timeline.length === 0 && !activityLabel && !pendingInteraction) {
     return (
@@ -94,21 +83,32 @@ export function ConversationView({
   return (
     <div className="ad-conversation" ref={scrollRef}>
       <div className="ad-conversation__inner">
-        {timeline.map((item, i) => {
-          if (item.kind === 'activity-group') {
-            return <ActivityGroup key={`group-${i}`} items={item.items} />
+        {timeline.map((entry, i) => {
+          if (entry.kind === 'activity-group') {
+            return <ActivityGroup key={`group-${i}`} items={entry.items} />
           }
-          if (item.kind === 'pending-text') {
-            return <MessageBubble key="pending" role="assistant" text={item.text} />
-          }
-          const { message } = item
-          if (message.content.kind === 'text') {
-            return <MessageBubble key={message.id} role={message.role} text={message.content.text} />
-          }
-          if (message.content.kind === 'interaction-record') {
+          const { item } = entry
+          if (item.kind === 'user') {
             return (
-              <div key={message.id} className="ad-conversation__interaction-note">
-                {message.content.prompt} — <strong>{message.content.choiceLabel}</strong>
+              <MessageBubble
+                key={item.id}
+                role="user"
+                text={item.text}
+                deliveryState={item.deliveryState}
+                onRetry={item.deliveryState === 'failed' ? () => onRetryMessage(item.id) : undefined}
+              />
+            )
+          }
+          if (item.kind === 'assistant') {
+            return <MessageBubble key={item.id} role="assistant" text={item.text} />
+          }
+          if (item.kind === 'system') {
+            return <MessageBubble key={item.id} role={item.role} text={item.text} />
+          }
+          if (item.kind === 'interaction-record') {
+            return (
+              <div key={item.id} className="ad-conversation__interaction-note">
+                {item.prompt} — <strong>{item.choiceLabel}</strong>
               </div>
             )
           }

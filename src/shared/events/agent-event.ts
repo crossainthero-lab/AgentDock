@@ -27,4 +27,14 @@ export type AgentEvent =
 export interface SessionEventEnvelope {
   sessionId: string
   event: AgentEvent
+  /** Assigned by a per-session monotonic counter in session-service's
+   *  broadcastEvent — lets the renderer store detect and drop a duplicate/
+   *  out-of-order redelivery of the same event. A safety net, not a
+   *  substitute for having exactly one listener per session (see
+   *  ipc/session.ts's `wired` guard and useSessionConversation's effect
+   *  cleanup for that). */
+  sequence: number
+  /** Opaque id for this specific envelope, for tracing/dedup — never derived
+   *  from message content. */
+  eventId: string
 }

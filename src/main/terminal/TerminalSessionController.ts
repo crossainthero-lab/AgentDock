@@ -17,18 +17,31 @@ export interface TerminalSessionController {
   onRawData(cb: (chunk: string) => void): () => void
   /** Idle-debounced stable screen snapshot — what classifiers consume. */
   onSnapshot(cb: (snapshot: ScreenSnapshot) => void): () => void
+  /** Fires at most once every BUSY_THROTTLE_MS while raw PTY data keeps
+   *  arriving — independent of the idle-debounced snapshot above. A fast,
+   *  continuously-redrawing spinner (confirmed against real captured Codex/
+   *  Antigravity "thinking" output) never goes idle long enough to produce
+   *  a snapshot, so without this a live "still working" signal could never
+   *  fire for the entire duration of a long thinking phase. Adapters use
+   *  this only as a generic fallback "Working" signal until a real
+   *  classified activity/tool_activity event arrives — see
+   *  agents/shared/conflict-integration.ts. */
+  onBusy(cb: () => void): () => void
   onExit(cb: (info: ProcessExitInfo) => void): () => void
 }
 
 const DEFAULT_IDLE_MS = 450
+const BUSY_THROTTLE_MS = 1200
 
 class TerminalSessionControllerImpl implements TerminalSessionController {
   private readonly proc: ManagedProcess
   private readonly screen: TerminalScreenBuffer
   private readonly rawListeners = new Set<(chunk: string) => void>()
   private readonly snapshotListeners = new Set<(snapshot: ScreenSnapshot) => void>()
+  private readonly busyListeners = new Set<() => void>()
   private readonly exitListeners = new Set<(info: ProcessExitInfo) => void>()
   private idleTimer: ReturnType<typeof setTimeout> | null = null
+  private lastBusyEmitMs = 0
 
   constructor(command: string, args: string[], options: SpawnOptions, private readonly idleMs: number) {
     this.screen = new TerminalScreenBuffer(options.cols ?? 120, options.rows ?? 30)
@@ -38,6 +51,7 @@ class TerminalSessionControllerImpl implements TerminalSessionController {
       this.screen.write(chunk)
       for (const l of this.rawListeners) l(chunk)
       this.scheduleSnapshot()
+      this.maybeEmitBusy()
     })
 
     this.proc.onExit((info) => {
@@ -57,6 +71,13 @@ class TerminalSessionControllerImpl implements TerminalSessionController {
     this.idleTimer = null
     const snap = this.screen.snapshot()
     for (const l of this.snapshotListeners) l(snap)
+  }
+
+  private maybeEmitBusy(): void {
+    const now = Date.now()
+    if (now - this.lastBusyEmitMs < BUSY_THROTTLE_MS) return
+    this.lastBusyEmitMs = now
+    for (const l of this.busyListeners) l()
   }
 
   get pid(): number {
@@ -92,6 +113,11 @@ class TerminalSessionControllerImpl implements TerminalSessionController {
   onSnapshot(cb: (snapshot: ScreenSnapshot) => void): () => void {
     this.snapshotListeners.add(cb)
     return () => this.snapshotListeners.delete(cb)
+  }
+
+  onBusy(cb: () => void): () => void {
+    this.busyListeners.add(cb)
+    return () => this.busyListeners.delete(cb)
   }
 
   onExit(cb: (info: ProcessExitInfo) => void): () => void {

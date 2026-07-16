@@ -2,14 +2,19 @@ import type React from 'react'
 import { Fragment } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import type { MessageRole } from '@shared/types'
+import type { DeliveryState } from '@shared/events/AgentEventReducer'
 import './MessageBubble.css'
 
 interface MessageBubbleProps {
   role: MessageRole
   text: string
+  /** Only meaningful for role === 'user' — reflects whether this message has
+   *  actually reached the live CLI yet (see AgentEventReducer.beginSend). */
+  deliveryState?: DeliveryState
+  onRetry?: () => void
 }
 
-export function MessageBubble({ role, text }: MessageBubbleProps): React.JSX.Element {
+export function MessageBubble({ role, text, deliveryState, onRetry }: MessageBubbleProps): React.JSX.Element {
   if (role === 'error') {
     return (
       <div className="ad-message ad-message--error">
@@ -22,6 +27,15 @@ export function MessageBubble({ role, text }: MessageBubbleProps): React.JSX.Ele
   return (
     <div className={`ad-message ad-message--${role === 'user' ? 'user' : 'assistant'}`}>
       <div className="ad-message__text">{renderRichText(text)}</div>
+      {deliveryState === 'sending' && <div className="ad-message__delivery">Sending…</div>}
+      {deliveryState === 'failed' && (
+        <div className="ad-message__delivery ad-message__delivery--failed">
+          Not delivered.{' '}
+          <button className="ad-message__retry" onClick={onRetry}>
+            Retry
+          </button>
+        </div>
+      )}
     </div>
   )
 }

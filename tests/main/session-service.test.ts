@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent } from '../../src/shared/events/agent-event'
+import type { AgentDetection } from '../../src/shared/types'
 
 const sessionRow = {
   id: 's1',
@@ -93,6 +94,51 @@ vi.mock('../../src/main/agents/adapter-registry', () => ({
 }))
 
 import { sessionService } from '../../src/main/services/session-service'
+import { detectionService } from '../../src/main/services/detection-service'
+
+describe('sessionService — delivery and event sequencing', () => {
+  beforeEach(() => {
+    fakeHandle = makeFakeHandle()
+    messageRepoAdd.mockClear()
+  })
+
+  it('writes the prompt to the PTY exactly once per sendPrompt call', async () => {
+    await sessionService.sendPrompt('s-once', 'hello there')
+    expect(fakeHandle.send).toHaveBeenCalledTimes(1)
+    expect(fakeHandle.send).toHaveBeenCalledWith('hello there')
+  })
+
+  it('assigns a strictly increasing sequence number to each broadcast event for a session', async () => {
+    const received: number[] = []
+    const unsubscribe = sessionService.onEvent('s-seq', (payload) => received.push(payload.sequence))
+
+    await sessionService.sendPrompt('s-seq', 'hello')
+    fakeHandle.emit({ type: 'activity', label: 'Pondering' })
+    fakeHandle.emit({ type: 'assistant_message', text: 'hi' })
+    fakeHandle.emit({ type: 'session_complete', exitCode: 0 })
+
+    expect(received).toEqual([1, 2, 3])
+    unsubscribe()
+  })
+
+  it('rejects (rather than silently resolving) when the agent genuinely cannot be reached', async () => {
+    vi.mocked(detectionService.detect).mockResolvedValueOnce({
+      agentId: 'claude-code',
+      installed: false,
+      version: null,
+      executablePath: null,
+      error: 'Claude Code is not installed.',
+      structuredOutput: true
+    } satisfies AgentDetection)
+
+    await expect(sessionService.sendPrompt('s-fail', 'hello')).rejects.toThrow('Claude Code is not installed.')
+    // The user's message and the delivery failure are still both real,
+    // persisted facts even though the IPC call rejects — only the renderer's
+    // knowledge of *delivery* is what needed to change here.
+    expect(messageRepoAdd).toHaveBeenCalledWith('s-fail', 'user', { kind: 'text', text: 'hello' })
+    expect(messageRepoAdd).toHaveBeenCalledWith('s-fail', 'error', { kind: 'text', text: 'Claude Code is not installed.' })
+  })
+})
 
 describe('sessionService.respondToInteraction — duplicate-submission prevention', () => {
   beforeEach(() => {

@@ -14,7 +14,15 @@ import { createTerminalSessionController, type TerminalSessionController } from 
 import { formatPromptForPty } from '../shared/terminal-text'
 import type { AgentAdapter, AgentRunContext, AgentRunHandle } from '../agent-adapter'
 import { getCapabilities } from '../capability-registry'
-import { createConflictState, withConflictDetection, type ConflictState } from '../shared/conflict-integration'
+import {
+  busyHeartbeatEvent,
+  createBusyHeartbeatState,
+  createConflictState,
+  noteClassifiedActivity,
+  withConflictDetection,
+  type BusyHeartbeatState,
+  type ConflictState
+} from '../shared/conflict-integration'
 import { ClaudeClassifier } from './ClaudeClassifier'
 import { ClaudeInputTranslator } from './ClaudeInputTranslator'
 
@@ -35,6 +43,7 @@ class ClaudeRunHandle implements AgentRunHandle {
   private readonly exitListeners = new Set<(info: ProcessExitInfo) => void>()
   private readonly classifier = new ClaudeClassifier()
   private conflictState: ConflictState = createConflictState()
+  private busyState: BusyHeartbeatState = createBusyHeartbeatState()
   private pendingAutoSelect: PendingAutoSelect | null = null
   hasStarted = false
 
@@ -45,6 +54,11 @@ class ClaudeRunHandle implements AgentRunHandle {
   }
 
   send(prompt: string): void {
+    // Reset per turn, not per process — the live PTY (and its controller's
+    // listeners) persists across turns, but "has a specific activity been
+    // classified yet" is inherently scoped to the turn currently in flight.
+    this.busyState = createBusyHeartbeatState()
+
     if (this.controller && this.controller.isRunning) {
       console.log(`[claude-code] writing to existing pid=${this.controller.pid}`)
       this.controller.write(formatPromptForPty(prompt))
@@ -72,9 +86,14 @@ class ClaudeRunHandle implements AgentRunHandle {
     })
     this.controller.onSnapshot((snapshot) => {
       const classified = this.classifier.classify(snapshot)
+      noteClassifiedActivity(this.busyState, classified)
       const { events, state } = withConflictDetection(this.conflictState, snapshot, classified)
       this.conflictState = state
       this.dispatch(events)
+    })
+    this.controller.onBusy(() => {
+      const heartbeat = busyHeartbeatEvent(this.busyState)
+      if (heartbeat) this.emit(heartbeat)
     })
     this.controller.onExit((info) => {
       this.emit({ type: 'session_complete', exitCode: info.exitCode })

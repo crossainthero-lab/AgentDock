@@ -36,6 +36,27 @@
   word-break: break-word;
 }
 
+.ad-message__delivery {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+
+.ad-message__delivery--failed {
+  color: var(--color-danger);
+}
+
+.ad-message__retry {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .ad-message__code {
   margin: 6px 0;
   padding: var(--space-3);

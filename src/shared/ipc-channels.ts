@@ -20,6 +20,7 @@ export const IpcChannels = {
   sessionStop: 'session:stop',
   sessionDelete: 'session:delete',
   sessionEvent: 'session:event',
+  sessionTrace: 'session:trace',
   sessionRespondInteraction: 'session:respondInteraction',
   sessionSetModel: 'session:setModel',
   sessionRunCommand: 'session:runCommand',

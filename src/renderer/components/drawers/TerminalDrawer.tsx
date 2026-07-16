@@ -1,11 +1,12 @@
 import type React from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Square, X } from 'lucide-react'
+import { Copy, ListTree, Square, TerminalSquare, X } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { getAgentDock } from '../../lib/agentDockClient'
 import type { TerminalExitInfo } from '@shared/types'
+import type { TraceEvent } from '@shared/events/trace-event'
 import { IconButton } from '../ui/IconButton'
 import './TerminalDrawer.css'
 
@@ -15,6 +16,19 @@ interface TerminalDrawerProps {
   sessionId: string
   inputSupported: boolean
   isRunning: boolean
+  /** Debug instrumentation (the "Testing Mode" requirement) — a bounded
+   *  ring buffer owned by the session store (useSessionConversation), never
+   *  fetched/reconstructed here. Shows where a message/event originated:
+   *  PTY, classifier, IPC, or the renderer store. */
+  traces: TraceEvent[]
+}
+
+function formatTrace(t: TraceEvent): string {
+  const parts = [new Date(t.timestamp).toLocaleTimeString(), t.kind]
+  if (t.turnId) parts.push(`turn:${t.turnId.slice(0, 8)}`)
+  if (t.sequence != null) parts.push(`#${t.sequence}`)
+  if (t.detail) parts.push(t.detail)
+  return parts.join('  ·  ')
 }
 
 function readThemeColors(): { background: string; foreground: string; cursor: string; selectionBackground: string } {
@@ -35,10 +49,11 @@ function readThemeColors(): { background: string; foreground: string; cursor: st
  * partial chunks, Unicode) faithfully, and forwards every keystroke straight
  * into the PTY's stdin.
  */
-export function TerminalDrawer({ open, onClose, sessionId, inputSupported, isRunning }: TerminalDrawerProps): React.JSX.Element | null {
+export function TerminalDrawer({ open, onClose, sessionId, inputSupported, isRunning, traces }: TerminalDrawerProps): React.JSX.Element | null {
   const containerRef = useRef<HTMLDivElement>(null)
   const scrollbackRef = useRef('')
   const [exitInfo, setExitInfo] = useState<TerminalExitInfo | null>(null)
+  const [view, setView] = useState<'terminal' | 'trace'>('terminal')
 
   useEffect(() => {
     if (!open || !containerRef.current) return
@@ -95,8 +110,15 @@ export function TerminalDrawer({ open, onClose, sessionId, inputSupported, isRun
   return (
     <div className="ad-terminal-drawer">
       <div className="ad-terminal-drawer__header">
-        <span>Terminal Output</span>
+        <span>{view === 'terminal' ? 'Terminal Output' : `Event Trace (${traces.length})`}</span>
         <div className="ad-terminal-drawer__header-actions">
+          <IconButton
+            label={view === 'terminal' ? 'Show event trace' : 'Show terminal'}
+            size="sm"
+            onClick={() => setView((v) => (v === 'terminal' ? 'trace' : 'terminal'))}
+          >
+            {view === 'terminal' ? <ListTree size={13} /> : <TerminalSquare size={13} />}
+          </IconButton>
           {isRunning && (
             <IconButton label="Interrupt" size="sm" onClick={() => getAgentDock().terminal.interrupt(sessionId)}>
               <Square size={13} />
@@ -111,7 +133,20 @@ export function TerminalDrawer({ open, onClose, sessionId, inputSupported, isRun
         </div>
       </div>
 
-      <div className="ad-terminal-drawer__body" ref={containerRef} />
+      <div className="ad-terminal-drawer__body" ref={containerRef} style={{ display: view === 'terminal' ? undefined : 'none' }} />
+      {view === 'trace' && (
+        <div className="ad-terminal-drawer__trace">
+          {traces.length === 0 ? (
+            <div className="ad-terminal-drawer__trace-empty">No events yet for this session.</div>
+          ) : (
+            traces.map((t, i) => (
+              <div key={i} className="ad-terminal-drawer__trace-row">
+                {formatTrace(t)}
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       {exitInfo && (
         <div className={`ad-terminal-drawer__exit${exitInfo.exitCode === 0 ? '' : ' ad-terminal-drawer__exit--error'}`}>

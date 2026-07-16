@@ -26,6 +26,8 @@ import type {
 } from '@shared/types'
 import { AGENT_IDS } from '@shared/types'
 import type { AgentEvent } from '@shared/events/agent-event'
+import type { SessionEventPayload } from '@shared/preload-api'
+import type { TraceEvent } from '@shared/events/trace-event'
 
 if (typeof window !== 'undefined' && !window.agentDock) {
   let workspace: Workspace | null = null
@@ -38,7 +40,8 @@ if (typeof window !== 'undefined' && !window.agentDock) {
     advanced: { gitExecutablePath: 'git' }
   }
 
-  const eventListeners = new Map<string, Set<(event: AgentEvent) => void>>()
+  const eventListeners = new Map<string, Set<(payload: SessionEventPayload) => void>>()
+  const sequenceCounters = new Map<string, number>()
 
   function addMessage(sessionId: string, message: SessionMessage): void {
     const list = messages.get(sessionId) ?? []
@@ -48,7 +51,11 @@ if (typeof window !== 'undefined' && !window.agentDock) {
 
   function emit(sessionId: string, event: AgentEvent): void {
     const listeners = eventListeners.get(sessionId)
-    if (listeners) for (const l of listeners) l(event)
+    if (!listeners) return
+    const sequence = (sequenceCounters.get(sessionId) ?? 0) + 1
+    sequenceCounters.set(sessionId, sequence)
+    const payload: SessionEventPayload = { event, sequence, eventId: `mock-${sessionId}-${sequence}` }
+    for (const l of listeners) l(payload)
   }
 
   function detectAgent(agentId: AgentId): AgentDetection {
@@ -162,6 +169,10 @@ if (typeof window !== 'undefined' && !window.agentDock) {
         set.add(cb)
         eventListeners.set(sessionId, set)
         return () => set.delete(cb)
+      },
+      onTrace(_sessionId: string, _cb: (trace: TraceEvent) => void) {
+        // No main process in a browser preview — nothing to trace.
+        return () => {}
       }
     },
     git: {

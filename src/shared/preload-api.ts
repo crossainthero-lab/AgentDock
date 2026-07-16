@@ -17,8 +17,17 @@ import type {
   Workspace
 } from './types'
 import type { AgentEvent } from './events/agent-event'
+import type { TraceEvent } from './events/trace-event'
 
 export type Unsubscribe = () => void
+
+/** What onEvent delivers — the event plus the envelope's dedup/tracing
+ *  metadata (see SessionEventEnvelope). */
+export interface SessionEventPayload {
+  event: AgentEvent
+  sequence: number
+  eventId: string
+}
 
 /**
  * The full surface exposed on `window.agentDock` by the preload script.
@@ -46,7 +55,10 @@ export interface AgentDockApi {
     interrupt(sessionId: string): Promise<void>
     stop(sessionId: string): Promise<void>
     delete(sessionId: string): Promise<void>
-    onEvent(sessionId: string, cb: (event: AgentEvent) => void): Unsubscribe
+    onEvent(sessionId: string, cb: (payload: SessionEventPayload) => void): Unsubscribe
+    /** Debug instrumentation only (Testing Mode) — never carries prompt/reply
+     *  text, see TraceEvent. */
+    onTrace(sessionId: string, cb: (trace: TraceEvent) => void): Unsubscribe
     /** Answers a choice_required/permission_required/authentication_required
      *  interaction — never appears as an ordinary chat message. */
     respondToInteraction(sessionId: string, interactionId: string, optionId: string): Promise<void>

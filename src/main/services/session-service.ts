@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import type { AgentId, CreateSessionInput, Session, SessionWithMessages } from '@shared/types'
 import type { AgentChoice, AgentEvent } from '@shared/events/agent-event'
+import type { TraceEvent } from '@shared/events/trace-event'
 import { sessionRepo } from '../db/repositories/session-repo'
 import { messageRepo } from '../db/repositories/message-repo'
 import { workspaceRepo } from '../db/repositories/workspace-repo'
@@ -22,20 +24,42 @@ interface PendingInteraction {
   options: AgentChoice[]
 }
 
+export interface SessionEventPayload {
+  event: AgentEvent
+  sequence: number
+  eventId: string
+}
+
 const running = new Map<string, RunningSession>()
-const eventListeners = new Map<string, Set<(event: AgentEvent) => void>>()
+const eventListeners = new Map<string, Set<(payload: SessionEventPayload) => void>>()
 const terminalListeners = new Map<string, Set<(data: string) => void>>()
 const terminalExitListeners = new Map<string, Set<(info: { exitCode: number | null; signal: string | null }) => void>>()
+const traceListeners = new Map<string, Set<(trace: TraceEvent) => void>>()
 const pendingInteractions = new Map<string, PendingInteraction>()
+/** Per-session monotonic counter backing SessionEventEnvelope.sequence — lets
+ *  the renderer store detect a duplicate/out-of-order redelivery. Assigned
+ *  here, once, at the single point every event is broadcast from. */
+const sequenceCounters = new Map<string, number>()
 
 function broadcastEvent(sessionId: string, event: AgentEvent): void {
+  trace(sessionId, { kind: 'TRANSLATED_EVENT_EMITTED', detail: event.type })
+  const sequence = (sequenceCounters.get(sessionId) ?? 0) + 1
+  sequenceCounters.set(sessionId, sequence)
+  const payload: SessionEventPayload = { event, sequence, eventId: randomUUID() }
   const listeners = eventListeners.get(sessionId)
-  if (listeners) for (const l of listeners) l(event)
+  if (listeners) for (const l of listeners) l(payload)
 }
 
 function broadcastTerminal(sessionId: string, data: string): void {
   const listeners = terminalListeners.get(sessionId)
   if (listeners) for (const l of listeners) l(data)
+}
+
+function trace(sessionId: string, entry: Omit<TraceEvent, 'sessionId' | 'timestamp'>): void {
+  const listeners = traceListeners.get(sessionId)
+  if (!listeners || listeners.size === 0) return
+  const full: TraceEvent = { ...entry, sessionId, timestamp: Date.now() }
+  for (const l of listeners) l(full)
 }
 
 function extractToolName(label: string): string {
@@ -80,7 +104,11 @@ export const sessionService = {
         messageRepo.add(sessionId, 'error', { kind: 'text', text: message })
         broadcastEvent(sessionId, { type: 'error', message })
         sessionRepo.setStatus(sessionId, 'error')
-        return
+        // Throw (rather than silently returning) so the IPC call this is
+        // behind actually rejects — otherwise the renderer has no way to
+        // know delivery failed and would wrongly mark the user's message as
+        // successfully sent.
+        throw new Error(message)
       }
 
       const adapter = getAdapter(session.agentId)
@@ -147,7 +175,10 @@ export const sessionService = {
         }
       })
 
-      const unsubscribeRaw = handle.onRawData((data) => broadcastTerminal(sessionId, data))
+      const unsubscribeRaw = handle.onRawData((data) => {
+        broadcastTerminal(sessionId, data)
+        trace(sessionId, { kind: 'PTY_OUTPUT_RECEIVED', detail: `${data.length}b` })
+      })
       const unsubscribeExit = handle.onProcessExit((info: ProcessExitInfo) => {
         const listeners = terminalExitListeners.get(sessionId)
         if (listeners) for (const l of listeners) l({ exitCode: info.exitCode, signal: info.signal != null ? String(info.signal) : null })
@@ -164,7 +195,9 @@ export const sessionService = {
       console.log(`[session] reusing live process for session ${sessionId}`)
     }
 
+    trace(sessionId, { kind: 'PTY_WRITE_REQUESTED' })
     run.handle.send(text)
+    trace(sessionId, { kind: 'PTY_WRITE_SUCCEEDED' })
   },
 
   respondToInteraction(sessionId: string, interactionId: string, optionId: string): void {
@@ -217,12 +250,21 @@ export const sessionService = {
     eventListeners.delete(sessionId)
     terminalListeners.delete(sessionId)
     terminalExitListeners.delete(sessionId)
+    traceListeners.delete(sessionId)
+    sequenceCounters.delete(sessionId)
   },
 
-  onEvent(sessionId: string, cb: (event: AgentEvent) => void): () => void {
+  onEvent(sessionId: string, cb: (payload: SessionEventPayload) => void): () => void {
     const set = eventListeners.get(sessionId) ?? new Set()
     set.add(cb)
     eventListeners.set(sessionId, set)
+    return () => set.delete(cb)
+  },
+
+  onTrace(sessionId: string, cb: (trace: TraceEvent) => void): () => void {
+    const set = traceListeners.get(sessionId) ?? new Set()
+    set.add(cb)
+    traceListeners.set(sessionId, set)
     return () => set.delete(cb)
   },
 

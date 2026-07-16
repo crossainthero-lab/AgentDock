@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IpcChannels } from '@shared/ipc-channels'
 import type { AgentDockApi } from '@shared/preload-api'
 import type { SessionEventEnvelope } from '@shared/events/agent-event'
+import type { TraceEventEnvelope } from '@shared/events/trace-event'
 
 // Curated bridge only — no generic ipcRenderer, fs, shell, or Node globals
 // are exposed to the renderer. Every method here maps 1:1 to a specific
@@ -31,10 +32,17 @@ const api: AgentDockApi = {
     delete: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionDelete, sessionId),
     onEvent: (sessionId, cb) => {
       const listener = (_event: Electron.IpcRendererEvent, envelope: SessionEventEnvelope): void => {
-        if (envelope.sessionId === sessionId) cb(envelope.event)
+        if (envelope.sessionId === sessionId) cb({ event: envelope.event, sequence: envelope.sequence, eventId: envelope.eventId })
       }
       ipcRenderer.on(IpcChannels.sessionEvent, listener)
       return () => ipcRenderer.removeListener(IpcChannels.sessionEvent, listener)
+    },
+    onTrace: (sessionId, cb) => {
+      const listener = (_event: Electron.IpcRendererEvent, envelope: TraceEventEnvelope): void => {
+        if (envelope.sessionId === sessionId) cb(envelope.trace)
+      }
+      ipcRenderer.on(IpcChannels.sessionTrace, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.sessionTrace, listener)
     },
     respondToInteraction: (sessionId, interactionId, optionId) =>
       ipcRenderer.invoke(IpcChannels.sessionRespondInteraction, sessionId, interactionId, optionId),

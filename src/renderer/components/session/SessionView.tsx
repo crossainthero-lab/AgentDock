@@ -114,13 +114,15 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
         )}
 
         <ConversationView
-          messages={conversation.messages}
-          pendingText={conversation.pendingText}
+          items={conversation.items}
           activityLabel={conversation.activityLabel}
           pendingInteraction={conversation.pendingInteraction}
           agentLabel={AGENT_DISPLAY_NAMES[session.agentId]}
           onRespondInteraction={(interactionId, optionId) => {
             conversation.respondToInteraction(interactionId, optionId).catch((err) => reportActionError('Respond', err))
+          }}
+          onRetryMessage={(userMessageId) => {
+            conversation.retryMessage(userMessageId).catch((err) => reportActionError('Retry', err))
           }}
           onOpenTerminal={openTerminal}
         />
@@ -145,6 +147,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
             sessionId={sessionId}
             inputSupported
             isRunning={conversation.isBusy}
+            traces={conversation.traces}
           />
         )}
       </div>

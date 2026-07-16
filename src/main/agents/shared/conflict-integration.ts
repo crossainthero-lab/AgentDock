@@ -32,3 +32,35 @@ export function withConflictDetection(
     state: result.state
   }
 }
+
+/**
+ * Backs the generic "{Agent} is working…" heartbeat every adapter forwards
+ * from TerminalSessionController.onBusy — used identically by all three
+ * adapters, same reasoning as the rest of this file. `hasSpecificActivity`
+ * starts false at the beginning of every turn (reset in each adapter's
+ * send()) and flips true the moment the classifier actually produces a real
+ * `activity`/`tool_activity` event, so the generic heartbeat stops competing
+ * with a more specific label once one is available — see
+ * TerminalSessionController.onBusy's doc comment for why a generic signal is
+ * needed at all (a fast-redrawing spinner never lets the idle-debounced
+ * snapshot fire).
+ */
+export interface BusyHeartbeatState {
+  hasSpecificActivity: boolean
+}
+
+export function createBusyHeartbeatState(): BusyHeartbeatState {
+  return { hasSpecificActivity: false }
+}
+
+export function noteClassifiedActivity(state: BusyHeartbeatState, events: AgentEvent[]): void {
+  if (events.some((e) => e.type === 'activity' || e.type === 'tool_activity')) {
+    state.hasSpecificActivity = true
+  }
+}
+
+/** Returns the generic heartbeat event, or null if a specific one has
+ *  already been seen this turn (nothing to add). */
+export function busyHeartbeatEvent(state: BusyHeartbeatState): AgentEvent | null {
+  return state.hasSpecificActivity ? null : { type: 'activity', label: 'Working' }
+}

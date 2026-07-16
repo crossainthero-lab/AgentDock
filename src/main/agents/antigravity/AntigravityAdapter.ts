@@ -24,7 +24,15 @@ import { createTerminalSessionController, type TerminalSessionController } from 
 import { formatPromptForPty } from '../shared/terminal-text'
 import type { AgentAdapter, AgentRunContext, AgentRunHandle } from '../agent-adapter'
 import { getCapabilities } from '../capability-registry'
-import { createConflictState, withConflictDetection, type ConflictState } from '../shared/conflict-integration'
+import {
+  busyHeartbeatEvent,
+  createBusyHeartbeatState,
+  createConflictState,
+  noteClassifiedActivity,
+  withConflictDetection,
+  type BusyHeartbeatState,
+  type ConflictState
+} from '../shared/conflict-integration'
 import { AntigravityClassifier } from './AntigravityClassifier'
 import { AntigravityInputTranslator } from './AntigravityInputTranslator'
 
@@ -48,6 +56,7 @@ class AntigravityRunHandle implements AgentRunHandle {
   private readonly exitListeners = new Set<(info: ProcessExitInfo) => void>()
   private readonly classifier = new AntigravityClassifier()
   private conflictState: ConflictState = createConflictState()
+  private busyState: BusyHeartbeatState = createBusyHeartbeatState()
 
   constructor(private readonly ctx: AgentRunContext) {}
 
@@ -56,6 +65,9 @@ class AntigravityRunHandle implements AgentRunHandle {
   }
 
   send(prompt: string): void {
+    // Reset per turn, not per process — see ClaudeAdapter's send() for why.
+    this.busyState = createBusyHeartbeatState()
+
     if (this.controller && this.controller.isRunning) {
       console.log(`[antigravity] writing to existing pid=${this.controller.pid}`)
       this.controller.write(formatPromptForPty(prompt))
@@ -75,9 +87,14 @@ class AntigravityRunHandle implements AgentRunHandle {
     })
     this.controller.onSnapshot((snapshot) => {
       const classified = this.classifier.classify(snapshot)
+      noteClassifiedActivity(this.busyState, classified)
       const { events, state } = withConflictDetection(this.conflictState, snapshot, classified)
       this.conflictState = state
       for (const event of events) this.emit(event)
+    })
+    this.controller.onBusy(() => {
+      const heartbeat = busyHeartbeatEvent(this.busyState)
+      if (heartbeat) this.emit(heartbeat)
     })
     this.controller.onExit((info) => {
       this.emit({ type: 'session_complete', exitCode: info.exitCode })
