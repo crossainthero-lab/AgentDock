@@ -1,7 +1,8 @@
-// Aggregates `activity`/`tool_activity` events into one summary that updates
-// in place (e.g. "Worked for 12s · Read 8 files · Edited 3 files") instead of
-// accumulating a growing list of lines. Pure and side-effect free so it can
-// be driven by both the live event stream and unit tests directly.
+// Aggregates `activity_started`/`activity_updated`/`activity_completed`
+// events into one summary that updates in place (e.g. "Worked for 12s ·
+// Read 8 files · Edited 3 files") instead of accumulating a growing list of
+// lines. Pure and side-effect free so it can be driven by both the live
+// event stream and unit tests directly.
 import type { AgentEvent } from './agent-event'
 
 export interface ActivityCounts {
@@ -51,25 +52,24 @@ export function resetActivity(): ActivityState {
 
 export function applyActivityEvent(state: ActivityState, event: AgentEvent, now: number = Date.now()): ActivityState {
   switch (event.type) {
-    case 'activity': {
+    case 'activity_started': {
+      return { ...state, active: true, startedAt: state.startedAt ?? now, label: event.label }
+    }
+    case 'activity_updated': {
       return {
         ...state,
         active: true,
         startedAt: state.startedAt ?? now,
         reportedElapsedMs: event.elapsedMs ?? state.reportedElapsedMs,
-        label: event.label
+        label: event.label ?? state.label
       }
     }
-    case 'tool_activity': {
-      if (event.status === 'running') {
-        return { ...state, active: true, startedAt: state.startedAt ?? now, label: event.label }
-      }
-      const category = categorizeToolLabel(event.label)
+    case 'activity_completed': {
+      const category = categorizeToolLabel(state.label ?? '')
       return {
         ...state,
         active: true,
         startedAt: state.startedAt ?? now,
-        label: event.label,
         counts: { ...state.counts, [category]: state.counts[category] + 1 },
         errorCount: state.errorCount + (event.status === 'error' ? 1 : 0)
       }

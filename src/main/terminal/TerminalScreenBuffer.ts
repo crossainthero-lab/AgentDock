@@ -1,3 +1,4 @@
+// ANTIGRAVITY-ONLY (see TerminalSessionController.ts's module comment).
 // Reconstructs the terminal's actual visible screen from raw PTY bytes,
 // instead of regexing raw chunks. Output can redraw lines, erase text, move
 // the cursor, split words/escape sequences across chunks, and repeat

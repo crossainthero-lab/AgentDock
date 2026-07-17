@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { AgentId, HandoffExecuteInput, Session } from '@shared/types'
 import { sessionRepo } from '../db/repositories/session-repo'
 import { messageRepo } from '../db/repositories/message-repo'
@@ -72,7 +73,7 @@ export const handoffService = {
       ? `${input.summary}\n\nAdditional instruction: ${input.additionalInstruction.trim()}`
       : input.summary
 
-    await sessionService.sendPrompt(newSession.id, prompt)
+    await sessionService.sendPrompt(newSession.id, prompt, randomUUID())
     return newSession
   }
 }

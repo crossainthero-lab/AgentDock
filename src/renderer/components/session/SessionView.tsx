@@ -70,7 +70,11 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
   const agentInstalled = detection?.installed ?? false
   const composerDisabled = !agentInstalled
   const composerDisabledReason = !agentInstalled ? `${AGENT_DISPLAY_NAMES[session.agentId]} is not installed. Open Settings → Agents.` : null
+  // Claude/Codex's structured JSON transports have no PTY/raw screen — the
+  // Terminal drawer only has something to show for Antigravity.
+  const showTerminal = detection?.structuredOutput === false
   const openTerminal = (): void => {
+    if (!showTerminal) return
     setChangesOpen(false)
     setTerminalOpen(true)
   }
@@ -83,6 +87,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           changedFileCount={changedCount}
           capabilities={capabilities}
           currentPermissionMode={settings?.agents[session.agentId]?.permissionMode ?? 'default'}
+          showTerminal={showTerminal}
           onOpenChanges={() => {
             setTerminalOpen(false)
             setChangesOpen(true)
@@ -140,7 +145,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           }}
         />
 
-        {terminalOpen && (
+        {showTerminal && terminalOpen && (
           <TerminalDrawer
             open={terminalOpen}
             onClose={() => setTerminalOpen(false)}

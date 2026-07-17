@@ -13,6 +13,9 @@ interface SessionHeaderProps {
   changedFileCount: number
   capabilities: AgentCapabilities | null
   currentPermissionMode: string
+  /** False for structured-transport agents (Claude, Codex) — they have no
+   *  PTY/raw screen for the Terminal drawer to show. */
+  showTerminal: boolean
   onOpenChanges: () => void
   onOpenTerminal: () => void
   onOpenHandoff: () => void
@@ -41,6 +44,7 @@ export function SessionHeader({
   changedFileCount,
   capabilities,
   currentPermissionMode,
+  showTerminal,
   onOpenChanges,
   onOpenTerminal,
   onOpenHandoff,
@@ -81,9 +85,11 @@ export function SessionHeader({
         />
         <Menu label="Commands" items={capabilities?.commands ?? []} onSelect={onRunCommand} />
 
-        <IconButton label="Terminal" size="sm" onClick={onOpenTerminal}>
-          <Terminal size={14} />
-        </IconButton>
+        {showTerminal && (
+          <IconButton label="Terminal" size="sm" onClick={onOpenTerminal}>
+            <Terminal size={14} />
+          </IconButton>
+        )}
 
         {changedFileCount > 0 && (
           <button className="ad-session-header__changes-btn" onClick={onOpenChanges}>

@@ -1,3 +1,4 @@
+// ANTIGRAVITY-ONLY (see TerminalSessionController.ts's module comment).
 // Flags when a classifier's interpretation can't be trusted: the screen has
 // stopped changing, the cursor isn't sitting at a fresh "prose finished"
 // position, and the classifier had nothing to say about it. That combination

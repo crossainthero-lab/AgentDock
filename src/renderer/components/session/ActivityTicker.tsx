@@ -3,8 +3,9 @@ import { Loader2 } from 'lucide-react'
 import './ActivityTicker.css'
 
 /** The live "Worked for 12s · Read 8 files · Edited 3 files" line — a single
- *  element that updates in place as new activity/tool_activity events
- *  arrive, instead of accumulating a growing list of status lines. */
+ *  element that updates in place as new activity_started/activity_updated/
+ *  activity_completed events arrive, instead of accumulating a growing
+ *  list of status lines. */
 export function ActivityTicker({ label }: { label: string | null }): React.JSX.Element | null {
   if (!label) return null
   return (

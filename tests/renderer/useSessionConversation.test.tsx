@@ -25,7 +25,7 @@ describe('useSessionConversation', () => {
   let eventListeners: Set<(payload: SessionEventPayload) => void>
   let attachCount: number
   let activeListenerCount: number
-  let sendPromptCalls: Array<[string, string]>
+  let sendPromptCalls: Array<[string, string, string]>
   let deferredSend: { resolve: () => void; reject: (err: Error) => void } | null
 
   beforeEach(() => {
@@ -42,8 +42,8 @@ describe('useSessionConversation', () => {
         async get() {
           return makeSession()
         },
-        async sendPrompt(sessionId, text) {
-          sendPromptCalls.push([sessionId, text])
+        async sendPrompt(sessionId, text, turnId) {
+          sendPromptCalls.push([sessionId, text, turnId])
           return new Promise<void>((resolve, reject) => {
             deferredSend = { resolve, reject }
           })
@@ -75,8 +75,12 @@ describe('useSessionConversation', () => {
     delete (window as unknown as { agentDock?: AgentDockApi }).agentDock
   })
 
-  function emit(event: AgentEvent, sequence: number): void {
-    const payload: SessionEventPayload = { event, sequence, eventId: `evt-${sequence}` }
+  /** Every AgentEvent is turn-scoped now — emits against the turnId the hook
+   *  itself generated and passed into the last sendPrompt call, so the
+   *  reducer's isForActiveTurn guard accepts it. */
+  function emit(event: Omit<AgentEvent, 'sessionId' | 'turnId'>, sequence: number): void {
+    const turnId = sendPromptCalls[sendPromptCalls.length - 1]?.[2] ?? 't-unknown'
+    const payload: SessionEventPayload = { event: { ...event, sessionId: SESSION_ID, turnId } as AgentEvent, sequence, eventId: `evt-${sequence}` }
     for (const l of eventListeners) l(payload)
   }
 
@@ -92,7 +96,7 @@ describe('useSessionConversation', () => {
     expect(activeListenerCount).toBe(0)
   })
 
-  it('shows the user message immediately — before the mocked PTY write ever resolves — and writes it exactly once', async () => {
+  it('shows the user message immediately — before the mocked IPC call ever resolves — and sends it exactly once', async () => {
     const { result } = renderHook(() => useSessionConversation(SESSION_ID))
     await waitFor(() => expect(result.current.loading).toBe(false))
 
@@ -104,7 +108,10 @@ describe('useSessionConversation', () => {
     // Still in flight — the mocked IPC call hasn't resolved yet.
     expect(result.current.items).toEqual([expect.objectContaining({ kind: 'user', text: 'hello there', deliveryState: 'sending' })])
     expect(result.current.activityLabel).toBe('Claude Code is working…')
-    expect(sendPromptCalls).toEqual([[SESSION_ID, 'hello there']])
+    expect(sendPromptCalls).toHaveLength(1)
+    expect(sendPromptCalls[0][0]).toBe(SESSION_ID)
+    expect(sendPromptCalls[0][1]).toBe('hello there')
+    expect(sendPromptCalls[0][2]).toEqual(expect.any(String))
 
     deferredSend?.resolve()
     await act(async () => {
@@ -113,7 +120,7 @@ describe('useSessionConversation', () => {
     expect(result.current.items[0]).toMatchObject({ deliveryState: 'sent' })
   })
 
-  it('marks the message failed and keeps it visible when the write genuinely fails', async () => {
+  it('marks the message failed and keeps it visible when the send genuinely fails', async () => {
     const { result } = renderHook(() => useSessionConversation(SESSION_ID))
     await waitFor(() => expect(result.current.loading).toBe(false))
 
@@ -131,7 +138,7 @@ describe('useSessionConversation', () => {
     expect(result.current.warning === null || result.current.warning !== undefined).toBe(true)
   })
 
-  it('does not let a CLI echo of the submitted prompt create a second user message', async () => {
+  it('does not let an echoed assistant_delta of the submitted prompt create a second user message', async () => {
     const { result } = renderHook(() => useSessionConversation(SESSION_ID))
     await waitFor(() => expect(result.current.loading).toBe(false))
 
@@ -141,13 +148,13 @@ describe('useSessionConversation', () => {
     deferredSend?.resolve()
     await waitFor(() => expect(result.current.items[0]).toMatchObject({ deliveryState: 'sent' }))
 
-    act(() => emit({ type: 'assistant_message', text: 'echo me back' }, 1))
+    act(() => emit({ type: 'assistant_delta', messageId: 'm1', textDelta: 'echo me back' }, 1))
 
     expect(result.current.items.filter((i) => i.kind === 'user')).toHaveLength(1)
     expect(result.current.items.filter((i) => i.kind === 'assistant')).toHaveLength(0)
   })
 
-  it('one reply streamed across multiple chunks renders as exactly one assistant message', async () => {
+  it('one reply streamed across multiple deltas renders as exactly one assistant message, and Working clears on turn_completed', async () => {
     const { result } = renderHook(() => useSessionConversation(SESSION_ID))
     await waitFor(() => expect(result.current.loading).toBe(false))
 
@@ -157,9 +164,9 @@ describe('useSessionConversation', () => {
     deferredSend?.resolve()
     await waitFor(() => expect(result.current.items[0]).toMatchObject({ deliveryState: 'sent' }))
 
-    act(() => emit({ type: 'assistant_message', text: 'Hello' }, 1))
-    act(() => emit({ type: 'assistant_message', text: ' world' }, 2))
-    act(() => emit({ type: 'session_complete', exitCode: 0 }, 3))
+    act(() => emit({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Hello' }, 1))
+    act(() => emit({ type: 'assistant_delta', messageId: 'm1', textDelta: ' world' }, 2))
+    act(() => emit({ type: 'turn_completed' }, 3))
 
     const assistantItems = result.current.items.filter((i) => i.kind === 'assistant')
     expect(assistantItems).toHaveLength(1)

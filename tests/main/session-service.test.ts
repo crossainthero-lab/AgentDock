@@ -39,9 +39,6 @@ vi.mock('../../src/main/services/settings-service', () => ({
 vi.mock('../../src/main/services/detection-service', () => ({
   detectionService: { detect: vi.fn(async () => ({ installed: true, executablePath: 'claude' })) }
 }))
-vi.mock('../../src/main/agents/claude/ClaudeAdapter', () => ({
-  getClaudeNativeSessionId: vi.fn(() => null)
-}))
 
 interface FakeHandle {
   isRunning: boolean
@@ -56,6 +53,7 @@ interface FakeHandle {
   respondToInteraction: ReturnType<typeof vi.fn>
   setModel: ReturnType<typeof vi.fn>
   runCommand: ReturnType<typeof vi.fn>
+  getNativeSessionId: ReturnType<typeof vi.fn>
   emit(event: AgentEvent): void
 }
 
@@ -77,6 +75,7 @@ function makeFakeHandle(): FakeHandle {
     respondToInteraction: vi.fn(),
     setModel: vi.fn(),
     runCommand: vi.fn(),
+    getNativeSessionId: vi.fn(() => null),
     emit(event) {
       for (const l of listeners) l(event)
     }
@@ -102,20 +101,20 @@ describe('sessionService — delivery and event sequencing', () => {
     messageRepoAdd.mockClear()
   })
 
-  it('writes the prompt to the PTY exactly once per sendPrompt call', async () => {
-    await sessionService.sendPrompt('s-once', 'hello there')
+  it('writes the prompt and turnId to the transport exactly once per sendPrompt call', async () => {
+    await sessionService.sendPrompt('s-once', 'hello there', 't1')
     expect(fakeHandle.send).toHaveBeenCalledTimes(1)
-    expect(fakeHandle.send).toHaveBeenCalledWith('hello there')
+    expect(fakeHandle.send).toHaveBeenCalledWith('hello there', 't1')
   })
 
   it('assigns a strictly increasing sequence number to each broadcast event for a session', async () => {
     const received: number[] = []
     const unsubscribe = sessionService.onEvent('s-seq', (payload) => received.push(payload.sequence))
 
-    await sessionService.sendPrompt('s-seq', 'hello')
-    fakeHandle.emit({ type: 'activity', label: 'Pondering' })
-    fakeHandle.emit({ type: 'assistant_message', text: 'hi' })
-    fakeHandle.emit({ type: 'session_complete', exitCode: 0 })
+    await sessionService.sendPrompt('s-seq', 'hello', 't1')
+    fakeHandle.emit({ type: 'activity_started', sessionId: 's-seq', turnId: 't1', activityId: 'a1', label: 'Pondering' })
+    fakeHandle.emit({ type: 'assistant_completed', sessionId: 's-seq', turnId: 't1', messageId: 'm1', text: 'hi' })
+    fakeHandle.emit({ type: 'turn_completed', sessionId: 's-seq', turnId: 't1' })
 
     expect(received).toEqual([1, 2, 3])
     unsubscribe()
@@ -131,12 +130,34 @@ describe('sessionService — delivery and event sequencing', () => {
       structuredOutput: true
     } satisfies AgentDetection)
 
-    await expect(sessionService.sendPrompt('s-fail', 'hello')).rejects.toThrow('Claude Code is not installed.')
+    await expect(sessionService.sendPrompt('s-fail', 'hello', 't1')).rejects.toThrow('Claude Code is not installed.')
     // The user's message and the delivery failure are still both real,
     // persisted facts even though the IPC call rejects — only the renderer's
     // knowledge of *delivery* is what needed to change here.
     expect(messageRepoAdd).toHaveBeenCalledWith('s-fail', 'user', { kind: 'text', text: 'hello' })
     expect(messageRepoAdd).toHaveBeenCalledWith('s-fail', 'error', { kind: 'text', text: 'Claude Code is not installed.' })
+  })
+
+  it('turn_completed persists the transport\'s real native session id, agent-agnostically', async () => {
+    fakeHandle.getNativeSessionId = vi.fn(() => 'real-session-id')
+    const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
+
+    await sessionService.sendPrompt('s-native', 'hello', 't1')
+    fakeHandle.emit({ type: 'turn_completed', sessionId: 's-native', turnId: 't1' })
+
+    expect(sessionRepo.setNativeSessionId).toHaveBeenCalledWith('s-native', 'real-session-id')
+  })
+
+  it('turn_failed persists an error message and does not fabricate turn_completed', async () => {
+    const received: AgentEvent[] = []
+    const unsubscribe = sessionService.onEvent('s-fail2', (payload) => received.push(payload.event))
+
+    await sessionService.sendPrompt('s-fail2', 'hello', 't1')
+    fakeHandle.emit({ type: 'turn_failed', sessionId: 's-fail2', turnId: 't1', reason: 'process crashed' })
+
+    expect(messageRepoAdd).toHaveBeenCalledWith('s-fail2', 'error', { kind: 'text', text: 'process crashed' })
+    expect(received.some((e) => e.type === 'turn_completed')).toBe(false)
+    unsubscribe()
   })
 })
 
@@ -146,16 +167,21 @@ describe('sessionService.respondToInteraction — duplicate-submission preventio
     messageRepoAdd.mockClear()
   })
 
-  it('does not forward a second call for an already-answered interactionId into the PTY', async () => {
-    await sessionService.sendPrompt('s1', 'do something')
+  it('does not forward a second call for an already-answered interactionId into the transport', async () => {
+    await sessionService.sendPrompt('s1', 'do something', 't1')
     fakeHandle.emit({
-      type: 'choice_required',
-      interactionId: 'x-1',
-      prompt: 'Pick one',
-      options: [
-        { id: '1', label: 'A' },
-        { id: '2', label: 'B' }
-      ]
+      type: 'interaction_required',
+      sessionId: 's1',
+      turnId: 't1',
+      interaction: {
+        kind: 'choice',
+        interactionId: 'x-1',
+        prompt: 'Pick one',
+        options: [
+          { id: '1', label: 'A' },
+          { id: '2', label: 'B' }
+        ]
+      }
     })
 
     sessionService.respondToInteraction('s1', 'x-1', '1')
@@ -163,18 +189,18 @@ describe('sessionService.respondToInteraction — duplicate-submission preventio
     expect(fakeHandle.respondToInteraction).toHaveBeenCalledWith('x-1', '1')
 
     // A double-click, or a UI race, re-firing the exact same answer — must
-    // not re-send input into the live CLI a second time.
+    // not re-send input into the live transport a second time.
     sessionService.respondToInteraction('s1', 'x-1', '1')
     expect(fakeHandle.respondToInteraction).toHaveBeenCalledTimes(1)
   })
 
   it('ignores a response naming an interactionId that is not the current pending one', async () => {
-    await sessionService.sendPrompt('s1', 'do something')
+    await sessionService.sendPrompt('s1', 'do something', 't1')
     fakeHandle.emit({
-      type: 'choice_required',
-      interactionId: 'x-1',
-      prompt: 'Pick one',
-      options: [{ id: '1', label: 'A' }]
+      type: 'interaction_required',
+      sessionId: 's1',
+      turnId: 't1',
+      interaction: { kind: 'choice', interactionId: 'x-1', prompt: 'Pick one', options: [{ id: '1', label: 'A' }] }
     })
 
     sessionService.respondToInteraction('s1', 'stale-id', '1')

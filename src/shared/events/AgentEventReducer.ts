@@ -14,20 +14,37 @@
 // send is requested, before any IPC round trip) and "assistant reply shows
 // twice" (there is no second, disjoint "pending text" render path that a
 // later DB reload could duplicate against).
-import type { AgentChoice, AgentEvent } from './agent-event'
+//
+// MessageAssembler model: there is no separate assembler data structure.
+// `items` plus `updateItem` (below) already does exactly what per-message
+// assembly needs — every assistant message and every activity is addressed
+// by its transport-supplied `messageId`/`activityId`, found-or-created in
+// `items` on first sight, then updated in place. This lets one turn produce
+// N assistant bubbles and N activities (a real agentic loop: text → tool
+// call → more text), which is a strictly more correct rendering than the
+// old one-bubble-per-turn model and requires no extra bookkeeping beyond
+// what `items` already tracks.
+//
+// Turn-scoping guard: every `AgentEvent` carries `sessionId`+`turnId`.
+// `isForActiveTurn` (below) rejects any event whose `turnId` doesn't match
+// the currently-open turn, or whose turn has already reached a terminal
+// status. This is what makes "a response cannot contain output from two
+// turns" and "a completed turn rejects stale deltas" true by construction —
+// previously nothing correlated an incoming event to a specific turn at
+// all, which was an undocumented second contributor (alongside the PTY
+// reflow bug) to cross-turn message corruption.
+import type { AgentChoice, AgentEvent, AgentInteraction } from './agent-event'
 import type { MessageContent, SessionMessage } from '../types'
 import { applyActivityEvent, categorizeToolLabel, createActivityState, resetActivity, type ActivityState } from './AgentActivityTracker'
 
 export type DeliveryState = 'sending' | 'sent' | 'failed'
-export type TurnStatus = 'submitted' | 'working' | 'streaming' | 'complete' | 'failed'
+export type TurnStatus = 'submitted' | 'working' | 'streaming' | 'awaiting_interaction' | 'complete' | 'failed'
 
 export interface AgentTurn {
   id: string
   sessionId: string
   userMessageId: string
   status: TurnStatus
-  activityId: string
-  assistantMessageId?: string
   startedAt: number
   completedAt?: number
 }
@@ -44,6 +61,19 @@ export type PendingInteraction =
   | { kind: 'permission'; interactionId: string; prompt: string; options: AgentChoice[] }
   | { kind: 'authentication'; message: string }
   | { kind: 'terminal_attention'; reason: string }
+
+function pendingInteractionFrom(interaction: AgentInteraction): PendingInteraction {
+  switch (interaction.kind) {
+    case 'choice':
+      return { kind: 'choice', interactionId: interaction.interactionId, prompt: interaction.prompt, options: interaction.options }
+    case 'permission':
+      return { kind: 'permission', interactionId: interaction.interactionId, prompt: interaction.prompt, options: interaction.options }
+    case 'authentication':
+      return { kind: 'authentication', message: interaction.message }
+    case 'terminal_attention':
+      return { kind: 'terminal_attention', reason: interaction.reason }
+  }
+}
 
 export interface AgentEventReducerState {
   items: ChatItem[]
@@ -63,12 +93,11 @@ export interface AgentEventReducerState {
    *  event under a new sequence number rather than the same one. */
   seenEventIds: string[]
   /** Ring buffer (last 5) of exact submitted-prompt text — belt-and-suspenders
-   *  against a CLI echo of the user's own prompt ever being misread as a
-   *  genuine assistant reply. Classifiers already never emit an event for an
-   *  echoed prompt line (confirmed against real captured transcripts), so
-   *  this is defensive insurance, not the primary mechanism. Exact match
-   *  only — a real reply that happens to quote part of the prompt back must
-   *  not be suppressed. */
+   *  against a PTY-classified echo of the user's own prompt ever being
+   *  misread as a genuine assistant reply (Antigravity's classifier path;
+   *  a no-op for Claude/Codex's structured deltas, which can never contain
+   *  a literal echoed prompt line). Exact match only — a real reply that
+   *  happens to quote part of the prompt back must not be suppressed. */
   recentUserPrompts: string[]
   pendingInteraction: PendingInteraction | null
   warning: string | null
@@ -123,9 +152,8 @@ function updateItem(items: ChatItem[], id: string, updater: (item: ChatItem) => 
   return items.map((item) => (item.id === id ? updater(item) : item))
 }
 
-function extractToolName(label: string): string {
-  const match = label.match(/^([A-Za-z][\w]*)/)
-  return match ? match[1] : label
+function hasItem(items: ChatItem[], id: string): boolean {
+  return items.some((item) => item.id === id)
 }
 
 function phraseForToolLabel(label: string): string {
@@ -152,13 +180,11 @@ export interface BeginSendParams {
 /** Step 1 of sending a prompt — inserts the user message and creates the
  *  turn + working indicator immediately, before any IPC/PTY round trip. */
 export function beginSend(state: AgentEventReducerState, params: BeginSendParams, now: number = Date.now()): AgentEventReducerState {
-  const activityId = `activity:${params.sessionId}:${params.turnId}`
   const turn: AgentTurn = {
     id: params.turnId,
     sessionId: params.sessionId,
     userMessageId: params.userMessageId,
     status: 'submitted',
-    activityId,
     startedAt: now
   }
   const userItem: ChatItem = { kind: 'user', id: params.userMessageId, text: params.text, deliveryState: 'sending', createdAt: now }
@@ -176,7 +202,8 @@ export function beginSend(state: AgentEventReducerState, params: BeginSendParams
   }
 }
 
-/** Step 2 — the PTY write actually succeeded. */
+/** Step 2 — the IPC send actually succeeded (main process accepted it and
+ *  started/resumed the transport). */
 export function markSent(state: AgentEventReducerState, userMessageId: string): AgentEventReducerState {
   return {
     ...state,
@@ -206,13 +233,11 @@ export function beginRetry(
   params: { sessionId: string; userMessageId: string; text: string; turnId: string; agentDisplayName: string },
   now: number = Date.now()
 ): AgentEventReducerState {
-  const activityId = `activity:${params.sessionId}:${params.turnId}`
   const turn: AgentTurn = {
     id: params.turnId,
     sessionId: params.sessionId,
     userMessageId: params.userMessageId,
     status: 'submitted',
-    activityId,
     startedAt: now
   }
   return {
@@ -232,7 +257,15 @@ export function beginRetry(
 export interface ApplyEnvelopeResult {
   state: AgentEventReducerState
   accepted: boolean
-  reason?: 'duplicate_sequence' | 'echo'
+  reason?: 'duplicate_sequence' | 'echo' | 'stale_turn'
+}
+
+/** True only while `event.turnId` names the currently-open turn and that
+ *  turn hasn't already reached a terminal status — the guard that stops a
+ *  stray/late/wrong-turn event from ever mutating the wrong message. */
+function isForActiveTurn(state: AgentEventReducerState, event: AgentEvent): boolean {
+  const turn = state.turn
+  return !!turn && turn.id === event.turnId && turn.status !== 'complete' && turn.status !== 'failed'
 }
 
 /** Applies one incoming (sequence, event) pair. Returns whether it was
@@ -257,110 +290,144 @@ export function applyEnvelope(
   }
 
   const event = envelope.event
-  if (event.type === 'assistant_message' && state.recentUserPrompts.includes(event.text.trim())) {
+
+  if (!isForActiveTurn(seen, event)) {
+    return { state: seen, accepted: false, reason: 'stale_turn' }
+  }
+
+  if (event.type === 'assistant_delta' && state.recentUserPrompts.includes(event.textDelta.trim())) {
     return { state: seen, accepted: false, reason: 'echo' }
   }
 
   return { state: applyEvent(seen, event, now), accepted: true }
 }
 
+/** Transport-supplied ids (`messageId`/`activityId`) are only guaranteed
+ *  unique *within* a turn — Codex's `item.id`s (`item_0`, `item_1`, ...)
+ *  restart from zero every turn, so a raw id can collide across turns. All
+ *  item lookups/creations below go through this turn-qualified key instead
+ *  of the raw transport id, so a same-numbered item from a different turn
+ *  can never be found-and-merged into. */
+function scopedId(turnId: string, rawId: string): string {
+  return `${turnId}:${rawId}`
+}
+
 function applyEvent(state: AgentEventReducerState, event: AgentEvent, now: number): AgentEventReducerState {
   const turn = state.turn
+  if (!turn) return state
 
   switch (event.type) {
-    case 'assistant_message': {
-      if (turn?.assistantMessageId) {
+    case 'turn_started': {
+      // Never regress a turn that's already streaming/awaiting interaction
+      // back down to 'working' — this can arrive after the first delta if
+      // the transport's own "started" event happens to be delivered late.
+      if (turn.status !== 'submitted') return state
+      return { ...state, turn: { ...turn, status: 'working' }, isBusy: true }
+    }
+
+    case 'assistant_delta': {
+      const id = scopedId(turn.id, event.messageId)
+      if (hasItem(state.items, id)) {
         return {
           ...state,
-          items: updateItem(state.items, turn.assistantMessageId, (i) => (i.kind === 'assistant' ? { ...i, text: i.text + event.text } : i)),
-          turn: { ...turn, status: 'streaming' }
+          items: updateItem(state.items, id, (i) => (i.kind === 'assistant' ? { ...i, text: i.text + event.textDelta } : i)),
+          turn: { ...turn, status: 'streaming' },
+          isBusy: true
         }
       }
-      const id = turn ? `assistant:${turn.id}` : `assistant:orphan:${now}:${state.items.length}`
+      const item: ChatItem = { kind: 'assistant', id, text: event.textDelta, createdAt: now }
+      return { ...state, items: [...state.items, item], turn: { ...turn, status: 'streaming' }, isBusy: true }
+    }
+
+    case 'assistant_completed': {
+      // The transport's final/authoritative text for this message. If
+      // deltas already streamed it, the accumulated text IS the final text
+      // — never re-appended or overwritten here (that's the literal "final
+      // result must not duplicate streamed text" rule). Only used to seed
+      // the message if no delta ever arrived for it (Codex's normal path —
+      // it delivers full text in one `item.completed`, never streams).
+      const id = scopedId(turn.id, event.messageId)
+      if (hasItem(state.items, id)) return state
       const item: ChatItem = { kind: 'assistant', id, text: event.text, createdAt: now }
-      return {
-        ...state,
-        items: [...state.items, item],
-        turn: turn ? { ...turn, assistantMessageId: id, status: 'streaming' } : turn
-      }
+      return { ...state, items: [...state.items, item] }
     }
 
-    case 'activity': {
-      return {
-        ...state,
-        activity: applyActivityEvent(state.activity, event, now),
-        currentPhrase: 'Thinking…',
-        turn: turn && turn.status === 'submitted' ? { ...turn, status: 'working' } : turn,
-        isBusy: true
+    case 'activity_started': {
+      const id = scopedId(turn.id, event.activityId)
+      const item: ChatItem = {
+        kind: 'tool-activity',
+        id,
+        tool: event.tool ?? event.label,
+        summary: `Running ${event.label}…`,
+        detail: event.label,
+        isError: false,
+        createdAt: now
       }
-    }
-
-    case 'tool_activity': {
-      const tool = extractToolName(event.label)
-      const items =
-        event.status === 'running'
-          ? state.items
-          : [
-              ...state.items,
-              {
-                kind: 'tool-activity' as const,
-                id: `tool:${turn?.id ?? now}:${state.items.length}`,
-                tool,
-                summary: event.status === 'error' ? `${tool} failed` : `Ran ${event.label}`,
-                detail: event.label,
-                isError: event.status === 'error',
-                createdAt: now
-              }
-            ]
       return {
         ...state,
-        items,
+        items: hasItem(state.items, id) ? state.items : [...state.items, item],
         activity: applyActivityEvent(state.activity, event, now),
         currentPhrase: phraseForToolLabel(event.label),
-        turn: turn && turn.status === 'submitted' ? { ...turn, status: 'working' } : turn,
+        turn: { ...turn, status: turn.status === 'submitted' ? 'working' : turn.status },
         isBusy: true
       }
     }
 
-    case 'choice_required':
+    case 'activity_updated': {
       return {
         ...state,
-        isBusy: true,
-        pendingInteraction: { kind: 'choice', interactionId: event.interactionId, prompt: event.prompt, options: event.options }
-      }
-    case 'permission_required':
-      return {
-        ...state,
-        isBusy: true,
-        pendingInteraction: { kind: 'permission', interactionId: event.interactionId, prompt: event.prompt, options: event.options }
-      }
-    case 'authentication_required':
-      return { ...state, isBusy: true, pendingInteraction: { kind: 'authentication', message: event.message } }
-    case 'terminal_attention_required':
-      return { ...state, isBusy: true, pendingInteraction: { kind: 'terminal_attention', reason: event.reason } }
-
-    case 'warning':
-      return { ...state, warning: event.message }
-
-    case 'error': {
-      const item: ChatItem = { kind: 'system', id: `error:${now}:${state.items.length}`, role: 'error', text: event.message, createdAt: now }
-      return {
-        ...state,
-        items: [...state.items, item],
-        turn: turn ? { ...turn, status: 'failed', completedAt: now } : turn,
-        currentPhrase: null,
-        error: event.message,
-        isBusy: false
+        items: updateItem(state.items, scopedId(turn.id, event.activityId), (i) =>
+          i.kind === 'tool-activity' ? { ...i, detail: event.label ?? i.detail } : i
+        ),
+        activity: applyActivityEvent(state.activity, event, now),
+        currentPhrase: event.label ? phraseForToolLabel(event.label) : state.currentPhrase,
+        isBusy: true
       }
     }
 
-    case 'session_complete':
+    case 'activity_completed': {
       return {
         ...state,
-        turn: turn ? { ...turn, status: 'complete', completedAt: now } : turn,
+        items: updateItem(state.items, scopedId(turn.id, event.activityId), (i) => {
+          if (i.kind !== 'tool-activity') return i
+          return {
+            ...i,
+            summary: event.summary ?? (event.status === 'error' ? `${i.tool} failed` : `Ran ${i.detail}`),
+            isError: event.status === 'error'
+          }
+        }),
+        activity: applyActivityEvent(state.activity, event, now),
+        isBusy: true
+      }
+    }
+
+    case 'interaction_required':
+      return {
+        ...state,
+        isBusy: true,
+        pendingInteraction: pendingInteractionFrom(event.interaction),
+        turn: { ...turn, status: 'awaiting_interaction' }
+      }
+
+    case 'turn_completed':
+      return {
+        ...state,
+        turn: { ...turn, status: 'complete', completedAt: now },
         currentPhrase: null,
         isBusy: false
       }
+
+    case 'turn_failed': {
+      const item: ChatItem = { kind: 'system', id: `error:${turn.id}`, role: 'error', text: event.reason, createdAt: now }
+      return {
+        ...state,
+        items: [...state.items, item],
+        turn: { ...turn, status: 'failed', completedAt: now },
+        currentPhrase: null,
+        error: event.reason,
+        isBusy: false
+      }
+    }
 
     default:
       return state
@@ -374,7 +441,7 @@ export function clearPendingInteraction(state: AgentEventReducerState): AgentEve
 }
 
 /** Fallback-only safety net (never the primary completion signal — that's
- *  session_complete/error) for a turn that's been open implausibly long,
+ *  turn_completed/turn_failed) for a turn that's been open implausibly long,
  *  e.g. a process that wedged without ever exiting cleanly. */
 export function forceCompleteStaleTurn(state: AgentEventReducerState, maxAgeMs: number, now: number = Date.now()): AgentEventReducerState {
   if (!state.turn || state.turn.status === 'complete' || state.turn.status === 'failed') return state

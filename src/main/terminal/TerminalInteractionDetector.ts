@@ -1,11 +1,11 @@
-// Agent-agnostic fallback prompt detection, shared by every classifier.
-// Confirmed against real captured output (Claude Code and Codex both use
-// these shapes for at least their generic prompts): numbered/lettered menus
-// with an "Enter selection"/"Enter y/n" style footer, y/n confirmations, and
-// "press enter to continue" banners. Agent-specific classifiers try their
-// own richer rules first and fall back to this when nothing more specific
-// matches — Codex and Antigravity rely on it as their primary mechanism.
-import type { AgentChoice } from '@shared/events/agent-event'
+// ANTIGRAVITY-ONLY (see TerminalSessionController.ts's module comment) —
+// Claude and Codex's structured JSON transports get real typed
+// permission/choice fields directly from the protocol and never call this.
+// Fallback prompt detection for AntigravityClassifier's PTY screen
+// classification: numbered/lettered menus with an "Enter selection"/"Enter
+// y/n" style footer, y/n confirmations, and "press enter to continue"
+// banners — confirmed against real captured terminal output.
+import type { AgentChoice } from '../agents/antigravity/classified-event'
 
 export type GenericInteractionKind = 'permission' | 'choice' | 'confirm_enter'
 

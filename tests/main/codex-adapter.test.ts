@@ -1,18 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent } from '../../src/shared/events/agent-event'
 import type { AgentRunContext } from '../../src/main/agents/agent-adapter'
 
 interface MockProc {
-  id: string
   pid: number
   isRunning: boolean
-  write: ReturnType<typeof vi.fn>
-  resize: ReturnType<typeof vi.fn>
-  interrupt: ReturnType<typeof vi.fn>
   kill: ReturnType<typeof vi.fn>
-  onData: (cb: (chunk: string) => void) => () => void
+  onLine: (cb: (line: string) => void) => () => void
   onExit: (cb: (info: { exitCode: number | null; signal: number | null }) => void) => () => void
-  _dataListeners: Array<(chunk: string) => void>
+  _lineListeners: Array<(line: string) => void>
   _exitListeners: Array<(info: { exitCode: number | null; signal: number | null }) => void>
 }
 
@@ -20,17 +16,15 @@ const spawnCalls: Array<{ command: string; args: string[]; proc: MockProc }> = [
 
 function makeMockProc(): MockProc {
   const proc: MockProc = {
-    id: `proc-${spawnCalls.length}`,
     pid: 2000 + spawnCalls.length,
     isRunning: true,
-    write: vi.fn(),
-    resize: vi.fn(),
-    interrupt: vi.fn(),
-    kill: vi.fn(),
-    _dataListeners: [],
+    kill: vi.fn(() => {
+      proc.isRunning = false
+    }),
+    _lineListeners: [],
     _exitListeners: [],
-    onData(cb) {
-      proc._dataListeners.push(cb)
+    onLine(cb) {
+      proc._lineListeners.push(cb)
       return () => {}
     },
     onExit(cb) {
@@ -41,13 +35,18 @@ function makeMockProc(): MockProc {
   return proc
 }
 
-vi.mock('../../src/main/services/pty-service', () => ({
-  ptyService: {
+function emitLine(proc: MockProc, obj: unknown): void {
+  for (const cb of proc._lineListeners) cb(JSON.stringify(obj))
+}
+
+vi.mock('../../src/main/services/child-process-service', () => ({
+  childProcessService: {
     spawn: (command: string, args: string[]) => {
       const proc = makeMockProc()
       spawnCalls.push({ command, args, proc })
       return proc
-    }
+    },
+    killAll: vi.fn()
   }
 }))
 
@@ -66,68 +65,115 @@ describe('codexAdapter', () => {
     spawnCalls.length = 0
   })
 
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('spawns codex interactively with --no-alt-screen, -C <workspace>, and the prompt in argv', () => {
+  it('spawns `codex exec <prompt> --json -C <workspace>` for the first turn', () => {
     const handle = codexAdapter.start(ctx)
-    handle.send('fix the bug')
+    handle.send('fix the bug', 't1')
 
     expect(spawnCalls).toHaveLength(1)
     expect(spawnCalls[0].command).toBe('codex')
-    expect(spawnCalls[0].args).toEqual(['--no-alt-screen', '-C', '/tmp/project', 'fix the bug'])
+    expect(spawnCalls[0].args).toEqual(['exec', 'fix the bug', '--json', '-C', '/tmp/project'])
   })
 
-  it('maps the real -a/--ask-for-approval values through unchanged', () => {
-    const handle = codexAdapter.start({ ...ctx, permissionMode: 'on-request' })
-    handle.send('go')
+  it('maps permission modes to --sandbox flags', () => {
+    const handle = codexAdapter.start({ ...ctx, permissionMode: 'workspace-write' })
+    handle.send('go', 't1')
 
-    expect(spawnCalls[0].args).toEqual(['--no-alt-screen', '--ask-for-approval', 'on-request', '-C', '/tmp/project', 'go'])
+    expect(spawnCalls[0].args).toContain('--sandbox')
+    expect(spawnCalls[0].args).toContain('workspace-write')
   })
 
   it('maps "bypass" to --dangerously-bypass-approvals-and-sandbox', () => {
     const handle = codexAdapter.start({ ...ctx, permissionMode: 'bypass' })
-    handle.send('go')
+    handle.send('go', 't1')
 
-    expect(spawnCalls[0].args).toEqual([
-      '--no-alt-screen',
-      '--dangerously-bypass-approvals-and-sandbox',
-      '-C',
-      '/tmp/project',
-      'go'
-    ])
+    expect(spawnCalls[0].args).toContain('--dangerously-bypass-approvals-and-sandbox')
   })
 
-  it('reuses the same live process for a second send() instead of spawning again', () => {
+  it('resumes via `codex exec resume <threadId> <prompt> --json` once a thread_id has been captured', () => {
+    const handle = codexAdapter.start({ ...ctx, nativeSessionId: 'thread-abc' })
+    handle.send('continue please', 't1')
+
+    expect(spawnCalls[0].args).toEqual(['exec', 'resume', 'thread-abc', 'continue please', '--json'])
+  })
+
+  it('spawns a fresh process every turn — never reuses a live process across turns', () => {
     const handle = codexAdapter.start(ctx)
-    handle.send('first turn')
-    expect(spawnCalls).toHaveLength(1)
+    handle.send('first turn', 't1')
+    emitLine(spawnCalls[0].proc, { type: 'turn.completed', usage: {} })
+    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 0, signal: null })
 
-    handle.send('second turn')
-    expect(spawnCalls).toHaveLength(1)
-    expect(spawnCalls[0].proc.write).toHaveBeenCalledWith('second turn\r')
+    handle.send('second turn', 't2')
+    expect(spawnCalls).toHaveLength(2)
   })
 
-  it('always forwards raw data via onRawData, regardless of content', () => {
+  it('interrupt() kills the in-flight process', () => {
     const handle = codexAdapter.start(ctx)
-    const rawChunks: string[] = []
-    handle.onRawData((chunk) => rawChunks.push(chunk))
-    handle.send('hello')
+    handle.send('go', 't1')
+    handle.interrupt()
 
-    for (const cb of spawnCalls[0].proc._dataListeners) cb('raw chunk \x1b[2K')
-
-    expect(rawChunks).toContain('raw chunk \x1b[2K')
+    expect(spawnCalls[0].proc.kill).toHaveBeenCalled()
   })
 
-  it('emits session_complete on process exit', () => {
+  it('captures the real thread_id, round-tripping through getNativeSessionId()', () => {
+    const handle = codexAdapter.start(ctx)
+    expect(handle.getNativeSessionId()).toBeNull()
+    handle.send('hello', 't1')
+    emitLine(spawnCalls[0].proc, { type: 'thread.started', thread_id: 'thread-xyz' })
+    expect(handle.getNativeSessionId()).toBe('thread-xyz')
+  })
+
+  it('turn.started produces the Working signal (turn_started)', () => {
     const handle = codexAdapter.start(ctx)
     const events: AgentEvent[] = []
     handle.onEvent((e) => events.push(e))
-    handle.send('hello')
+    handle.send('hello', 't1')
 
-    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 0, signal: null })
-    expect(events).toContainEqual({ type: 'session_complete', exitCode: 0 })
+    emitLine(spawnCalls[0].proc, { type: 'thread.started', thread_id: 't' })
+    emitLine(spawnCalls[0].proc, { type: 'turn.started' })
+    expect(events.filter((e) => e.type === 'turn_started')).toHaveLength(1)
+  })
+
+  it('an agent_message item.completed produces exactly one assistant message, and turn.completed completes the right turn', () => {
+    const handle = codexAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('say pong', 't1')
+
+    const proc = spawnCalls[0].proc
+    emitLine(proc, { type: 'thread.started', thread_id: 't' })
+    emitLine(proc, { type: 'turn.started' })
+    emitLine(proc, { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'pong' } })
+    emitLine(proc, { type: 'turn.completed', usage: {} })
+
+    expect(events).toContainEqual({ type: 'assistant_completed', sessionId: 's1', turnId: 't1', messageId: 'item_0', text: 'pong' })
+    expect(events).toContainEqual({ type: 'turn_completed', sessionId: 's1', turnId: 't1' })
+  })
+
+  it('turn.failed creates a failed state', () => {
+    const handle = codexAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('hello', 't1')
+
+    emitLine(spawnCalls[0].proc, { type: 'turn.failed', error: { message: 'boom' } })
+    expect(events).toContainEqual({ type: 'turn_failed', sessionId: 's1', turnId: 't1', reason: 'boom' })
+  })
+
+  it('process exit without any completion event synthesizes turn_failed, never a fabricated turn_completed', () => {
+    const handle = codexAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('hello', 't1')
+
+    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 1, signal: null })
+
+    expect(events.some((e) => e.type === 'turn_completed')).toBe(false)
+    expect(events).toContainEqual({
+      type: 'turn_failed',
+      sessionId: 's1',
+      turnId: 't1',
+      reason: 'Codex exited unexpectedly (code 1) without completing this turn.'
+    })
   })
 
   it('reports no fabricated models — an empty list since none are verified', () => {

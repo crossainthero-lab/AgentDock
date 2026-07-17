@@ -145,12 +145,11 @@ if (typeof window !== 'undefined' && !window.agentDock) {
         if (!session) return null
         return { ...session, messages: messages.get(sessionId) ?? [] }
       },
-      async sendPrompt(sessionId, text) {
+      async sendPrompt(sessionId, text, turnId) {
         addMessage(sessionId, { id: `${sessionId}-${Date.now()}`, sessionId, role: 'user', content: { kind: 'text', text }, createdAt: new Date().toISOString() })
         const errorText = `${sessions.get(sessionId)?.agentId ?? 'This agent'} is not installed in this browser preview.`
         addMessage(sessionId, { id: `${sessionId}-${Date.now()}-e`, sessionId, role: 'error', content: { kind: 'text', text: errorText }, createdAt: new Date().toISOString() })
-        emit(sessionId, { type: 'error', message: errorText })
-        emit(sessionId, { type: 'session_complete', exitCode: 1 })
+        emit(sessionId, { type: 'turn_failed', sessionId, turnId, reason: errorText })
       },
       async respondToInteraction() {},
       async setModel() {},

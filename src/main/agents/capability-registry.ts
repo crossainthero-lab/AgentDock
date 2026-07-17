@@ -7,14 +7,16 @@ import type { AgentCapabilities, AgentId } from '@shared/types'
 
 const claudeCapabilities: AgentCapabilities = {
   agentId: 'claude-code',
-  // Real /model picker, captured against claude 2.1.207 (`--ax-screen-reader`
-  // mode) — ids are the picker's own numbered positions, sent verbatim.
+  // Real `--model` flag values, verified against `claude --help`
+  // ("Provide an alias for the latest model ... or a model's full name").
+  // The structured transport is process-per-turn (see ClaudeAdapter), so
+  // there is no live interactive picker anymore — these ids are passed
+  // straight through as `--model <id>` on the next turn's spawn.
   models: [
-    { id: '1', label: 'Default (recommended)', description: 'Sonnet 5 · efficient for routine tasks' },
-    { id: '2', label: 'Sonnet', description: 'Sonnet 5 · efficient for routine tasks' },
-    { id: '3', label: 'Fable', description: 'Fable 5 · most capable for hard/long tasks' },
-    { id: '4', label: 'Opus', description: 'Opus 4.8 · best for complex tasks' },
-    { id: '5', label: 'Haiku', description: 'Haiku 4.5 · fastest for quick answers' }
+    { id: 'sonnet', label: 'Sonnet', description: 'Sonnet 5 · efficient for routine tasks' },
+    { id: 'fable', label: 'Fable', description: 'Fable 5 · most capable for hard/long tasks' },
+    { id: 'opus', label: 'Opus', description: 'Opus 4.8 · best for complex tasks' },
+    { id: 'haiku', label: 'Haiku', description: 'Haiku 4.5 · fastest for quick answers' }
   ],
   permissionModes: [
     { id: 'default', label: 'Default', description: 'Ask before edits and risky commands' },
@@ -22,34 +24,35 @@ const claudeCapabilities: AgentCapabilities = {
     { id: 'plan', label: 'Plan', description: 'Plan only, no execution' },
     { id: 'bypassPermissions', label: 'Bypass permissions', description: 'Never ask (dangerous)' }
   ],
-  commands: [
-    { id: 'clear', label: 'Clear conversation', description: '/clear' },
-    { id: 'compact', label: 'Compact conversation', description: '/compact' },
-    { id: 'cost', label: 'Show cost', description: '/cost' },
-    { id: 'doctor', label: 'Run doctor', description: '/doctor' },
-    { id: 'init', label: 'Create CLAUDE.md', description: '/init' }
-  ],
+  // No confirmed one-shot-process equivalent of the interactive /clear,
+  // /compact, /cost, /doctor, /init slash commands — left empty rather than
+  // guessing a CLI flag/command that might not exist for `claude -p`.
+  commands: [],
+  // "Live" now means "applies starting the next turn" (each turn is a
+  // fresh process — see ClaudeAdapter.setModel) rather than a mid-turn
+  // interactive picker.
   supportsLiveModelSwitch: true,
   // Permission mode is only applied at process spawn (--permission-mode);
-  // switching live wasn't verified against a real capture, so changes here
-  // apply the next time the session's process restarts (safe, reuses the
-  // existing Settings → Agents flag path).
+  // changes apply the next time a turn spawns a new process.
   supportsLivePermissionSwitch: false,
   authState: 'unknown'
 }
 
 const codexCapabilities: AgentCapabilities = {
   agentId: 'codex',
-  // No verified interactive model list/command for Codex — left empty
-  // rather than guessing model ids that might not exist.
+  // No verified model list/command for `codex exec` — left empty rather
+  // than guessing model ids that might not exist.
   models: [],
-  // Real values from `codex --help` (-a/--ask-for-approval), for display
-  // only — applied at spawn, not live (see CodexAdapter).
+  // Real values from `codex exec --help` — non-interactive Codex has no
+  // approval prompt to ask (there's no one to answer it), so this is a
+  // sandbox policy (-s/--sandbox), not an ask-for-approval mode like the
+  // old interactive TUI had. Applied at spawn only (see CodexAdapter).
   permissionModes: [
-    { id: 'untrusted', label: 'Untrusted', description: 'Only run trusted read-only commands without asking' },
-    { id: 'on-request', label: 'On request', description: 'The model asks when it needs approval' },
-    { id: 'never', label: 'Never ask', description: 'Never ask for approval' },
-    { id: 'bypass', label: 'Bypass (dangerous)', description: 'Skip all confirmation and sandboxing' }
+    { id: 'default', label: 'Default', description: "Use Codex's configured sandbox policy" },
+    { id: 'read-only', label: 'Read-only', description: '--sandbox read-only' },
+    { id: 'workspace-write', label: 'Workspace write', description: '--sandbox workspace-write' },
+    { id: 'danger-full-access', label: 'Full access (dangerous)', description: '--sandbox danger-full-access' },
+    { id: 'bypass', label: 'Bypass (dangerous)', description: '--dangerously-bypass-approvals-and-sandbox' }
   ],
   commands: [],
   supportsLiveModelSwitch: false,

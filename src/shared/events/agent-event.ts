@@ -1,8 +1,19 @@
-// Shared event contract emitted by agent adapters (after classification) and
-// forwarded to the renderer over the `session:event` IPC channel. Consumers
-// never need to understand any agent's terminal formatting — raw PTY bytes
-// stay on the separate `terminal:*` channel (see AgentDockApi.terminal) for
-// the Terminal drawer fallback.
+// Shared, transport-agnostic event contract. Every adapter — regardless of
+// whether it's driving a structured JSON transport (Claude, Codex) or
+// classifying a PTY screen (Antigravity) — maps its own protocol into this
+// vocabulary before it ever reaches session-service/the renderer. Consumers
+// never need to know which transport produced an event.
+//
+// Every event is scoped to exactly one session + turn. That's not
+// decorative: AgentEventReducer's `isForActiveTurn` guard uses `turnId` to
+// reject stray/late content from a turn that isn't the current one — the
+// direct fix for the old flat-event model's "no correlation check" bug
+// (see AgentEventReducer.ts's module comment).
+//
+// Assistant text and tool activity are id-addressed (`messageId`/
+// `activityId`) rather than positional, so a turn can legitimately produce
+// N assistant messages and N activities (a real agentic loop: text → tool
+// call → more text) instead of the old one-bubble-per-turn assumption.
 
 export interface AgentChoice {
   id: string
@@ -10,19 +21,33 @@ export interface AgentChoice {
   description?: string
 }
 
+export type AgentInteraction =
+  | { kind: 'choice'; interactionId: string; prompt: string; options: AgentChoice[] }
+  | { kind: 'permission'; interactionId: string; prompt: string; options: AgentChoice[] }
+  | { kind: 'authentication'; interactionId: string; message: string }
+  // PTY/Antigravity-only in practice — Claude/Codex's one-shot processes
+  // have no "screen stalled, unclear what's happening" concept.
+  | { kind: 'terminal_attention'; interactionId: string; reason: string }
+
+interface AgentEventBase {
+  sessionId: string
+  turnId: string
+}
+
 export type AgentEvent =
-  | { type: 'assistant_message'; text: string }
-  | { type: 'activity'; label: string; elapsedMs?: number }
-  | { type: 'tool_activity'; label: string; status: 'running' | 'done' | 'error' }
-  // interactionId correlates the user's eventual answer (session.respondToInteraction)
-  // back to this specific prompt — there is no such id in terminal text itself.
-  | { type: 'choice_required'; interactionId: string; prompt: string; options: AgentChoice[] }
-  | { type: 'permission_required'; interactionId: string; prompt: string; options: AgentChoice[] }
-  | { type: 'authentication_required'; message: string }
-  | { type: 'terminal_attention_required'; reason: string }
-  | { type: 'warning'; message: string }
-  | { type: 'error'; message: string }
-  | { type: 'session_complete'; exitCode: number | null }
+  | (AgentEventBase & { type: 'turn_started' })
+  | (AgentEventBase & { type: 'assistant_delta'; messageId: string; textDelta: string })
+  | (AgentEventBase & { type: 'assistant_completed'; messageId: string; text: string })
+  | (AgentEventBase & { type: 'activity_started'; activityId: string; label: string; tool?: string })
+  | (AgentEventBase & { type: 'activity_updated'; activityId: string; label?: string; elapsedMs?: number })
+  // Self-describing like assistant_completed's `text` — carries its own
+  // label/tool rather than requiring the consumer to correlate back to the
+  // matching activity_started, since session-service only persists on
+  // completion and has no reason to track per-turn activity state itself.
+  | (AgentEventBase & { type: 'activity_completed'; activityId: string; label: string; tool?: string; status: 'done' | 'error'; summary?: string })
+  | (AgentEventBase & { type: 'interaction_required'; interaction: AgentInteraction })
+  | (AgentEventBase & { type: 'turn_completed'; result?: string })
+  | (AgentEventBase & { type: 'turn_failed'; reason: string })
 
 export interface SessionEventEnvelope {
   sessionId: string

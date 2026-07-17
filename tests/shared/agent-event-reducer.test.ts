@@ -21,8 +21,8 @@ function send(state: AgentEventReducerState, text: string, turnId = 't1', now = 
   return beginSend(state, { sessionId: SESSION_ID, userMessageId: `u:${turnId}`, turnId, text, agentDisplayName: 'Claude Code' }, now)
 }
 
-function envelope(event: AgentEvent, sequence: number, eventId = `e${sequence}`) {
-  return { event, sequence, eventId }
+function envelope(event: Omit<AgentEvent, 'sessionId' | 'turnId'>, sequence: number, turnId = 't1', eventId = `e${sequence}`) {
+  return { event: { ...event, sessionId: SESSION_ID, turnId } as AgentEvent, sequence, eventId }
 }
 
 describe('immediate user message', () => {
@@ -68,10 +68,10 @@ describe('immediate user message', () => {
     expect(state.turn?.id).toBe('t2')
   })
 
-  it("drops an assistant_message that exactly echoes the user's own submitted prompt", () => {
+  it("drops an assistant_delta that exactly echoes the user's own submitted prompt", () => {
     let state = createReducerState()
     state = send(state, 'echo test prompt')
-    const result = applyEnvelope(state, envelope({ type: 'assistant_message', text: 'echo test prompt' }, 1))
+    const result = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'echo test prompt' }, 1))
     expect(result.accepted).toBe(false)
     expect(result.reason).toBe('echo')
     expect(result.state.items.filter((i) => i.kind === 'assistant')).toHaveLength(0)
@@ -80,18 +80,21 @@ describe('immediate user message', () => {
   it('does not suppress a real reply that merely quotes part of the prompt', () => {
     let state = createReducerState()
     state = send(state, 'summarize this file')
-    const result = applyEnvelope(state, envelope({ type: 'assistant_message', text: 'Sure — "summarize this file" is a good idea, here it is:' }, 1))
+    const result = applyEnvelope(
+      state,
+      envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Sure — "summarize this file" is a good idea, here it is:' }, 1)
+    )
     expect(result.accepted).toBe(true)
     expect(result.state.items.filter((i) => i.kind === 'assistant')).toHaveLength(1)
   })
 })
 
 describe('assistant reply appears exactly once', () => {
-  it('streams multiple chunks of one response into a single stable assistant item', () => {
+  it('streams multiple deltas of one response into a single stable assistant item, addressed by messageId', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    let result = applyEnvelope(state, envelope({ type: 'assistant_message', text: 'Hello' }, 1))
-    result = applyEnvelope(result.state, envelope({ type: 'assistant_message', text: ' world' }, 2))
+    let result = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Hello' }, 1))
+    result = applyEnvelope(result.state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: ' world' }, 2))
     state = result.state
 
     const assistantItems = state.items.filter((i) => i.kind === 'assistant')
@@ -99,11 +102,43 @@ describe('assistant reply appears exactly once', () => {
     expect(assistantItems[0]).toMatchObject({ text: 'Hello world' })
   })
 
-  it('a final event after streaming does not duplicate the streamed message', () => {
+  it('a turn can produce more than one assistant message (agentic loop: text, tool call, more text)', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    state = applyEnvelope(state, envelope({ type: 'assistant_message', text: 'Hello' }, 1)).state
-    state = applyEnvelope(state, envelope({ type: 'session_complete', exitCode: 0 }, 2)).state
+    state = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Looking...' }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'assistant_completed', messageId: 'm1', text: 'Looking...' }, 2)).state
+    state = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm2', textDelta: 'Found it.' }, 3)).state
+
+    const assistantItems = state.items.filter((i) => i.kind === 'assistant')
+    expect(assistantItems.map((i) => (i.kind === 'assistant' ? i.text : ''))).toEqual(['Looking...', 'Found it.'])
+  })
+
+  it('assistant_completed does not duplicate/overwrite text already delivered via deltas', () => {
+    let state = createReducerState()
+    state = send(state, 'go')
+    state = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'pong' }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'assistant_completed', messageId: 'm1', text: 'pong' }, 2)).state
+
+    const assistantItems = state.items.filter((i) => i.kind === 'assistant')
+    expect(assistantItems).toHaveLength(1)
+    expect(assistantItems[0]).toMatchObject({ text: 'pong' })
+  })
+
+  it('assistant_completed seeds the message when no delta ever arrived for it (Codex-style non-streaming reply)', () => {
+    let state = createReducerState()
+    state = send(state, 'go')
+    state = applyEnvelope(state, envelope({ type: 'assistant_completed', messageId: 'm1', text: 'pong' }, 1)).state
+
+    const assistantItems = state.items.filter((i) => i.kind === 'assistant')
+    expect(assistantItems).toHaveLength(1)
+    expect(assistantItems[0]).toMatchObject({ text: 'pong' })
+  })
+
+  it('a final turn_completed event after streaming does not duplicate the streamed message', () => {
+    let state = createReducerState()
+    state = send(state, 'go')
+    state = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Hello' }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'turn_completed' }, 2)).state
 
     expect(state.items.filter((i) => i.kind === 'assistant')).toHaveLength(1)
   })
@@ -111,8 +146,8 @@ describe('assistant reply appears exactly once', () => {
   it('ignores a redelivered envelope with an already-applied sequence number', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    const first = applyEnvelope(state, envelope({ type: 'assistant_message', text: 'Hello' }, 1))
-    const redelivered = applyEnvelope(first.state, envelope({ type: 'assistant_message', text: 'Hello' }, 1))
+    const first = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Hello' }, 1))
+    const redelivered = applyEnvelope(first.state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Hello' }, 1))
 
     expect(redelivered.accepted).toBe(false)
     expect(redelivered.reason).toBe('duplicate_sequence')
@@ -123,8 +158,8 @@ describe('assistant reply appears exactly once', () => {
   it('ignores a redelivered eventId even under a new sequence number', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    const first = applyEnvelope(state, envelope({ type: 'assistant_message', text: 'Hello' }, 1, 'evt-A'))
-    const redelivered = applyEnvelope(first.state, envelope({ type: 'assistant_message', text: ' world' }, 2, 'evt-A'))
+    const first = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Hello' }, 1, 't1', 'evt-A'))
+    const redelivered = applyEnvelope(first.state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: ' world' }, 2, 't1', 'evt-A'))
 
     expect(redelivered.accepted).toBe(false)
     expect(redelivered.state.items.find((i) => i.kind === 'assistant')).toMatchObject({ text: 'Hello' })
@@ -136,72 +171,119 @@ describe('assistant reply appears exactly once', () => {
     ]
     let state = seedFromPersisted(persisted)
     state = send(state, 'go')
-    state = applyEnvelope(state, envelope({ type: 'assistant_message', text: 'new reply' }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm2', textDelta: 'new reply' }, 1)).state
 
     const assistantTexts = state.items.filter((i) => i.kind === 'assistant').map((i) => (i.kind === 'assistant' ? i.text : ''))
     expect(assistantTexts).toEqual(['earlier reply', 'new reply'])
   })
 })
 
+describe('turn isolation — the core fix for cross-turn/cross-session corruption', () => {
+  it('an event carrying a different turnId than the currently-open turn is rejected, not merged in', () => {
+    let state = createReducerState()
+    state = send(state, 'go', 't1')
+    const result = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'wrong turn' }, 1, 'stale-turn'))
+    expect(result.accepted).toBe(false)
+    expect(result.reason).toBe('stale_turn')
+    expect(result.state.items.filter((i) => i.kind === 'assistant')).toHaveLength(0)
+  })
+
+  it('once a turn completes, a late-arriving delta for that same turnId is rejected, not appended', () => {
+    let state = createReducerState()
+    state = send(state, 'go', 't1')
+    state = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Hello' }, 1, 't1')).state
+    state = applyEnvelope(state, envelope({ type: 'turn_completed' }, 2, 't1')).state
+
+    const late = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: ' world' }, 3, 't1'))
+    expect(late.accepted).toBe(false)
+    expect(late.reason).toBe('stale_turn')
+    expect(late.state.items.find((i) => i.kind === 'assistant')).toMatchObject({ text: 'Hello' })
+  })
+
+  it('a new turn never merges with a coincidentally-reused messageId from a prior turn', () => {
+    let state = createReducerState()
+    state = send(state, 'first', 't1')
+    state = applyEnvelope(state, envelope({ type: 'assistant_completed', messageId: 'm1', text: 'first reply' }, 1, 't1')).state
+    state = applyEnvelope(state, envelope({ type: 'turn_completed' }, 2, 't1')).state
+
+    state = send(state, 'second', 't2')
+    state = applyEnvelope(state, envelope({ type: 'assistant_completed', messageId: 'm1', text: 'second reply' }, 3, 't2')).state
+
+    const assistantTexts = state.items.filter((i) => i.kind === 'assistant').map((i) => (i.kind === 'assistant' ? i.text : ''))
+    expect(assistantTexts).toEqual(['first reply', 'second reply'])
+  })
+})
+
 describe('working / thinking state', () => {
-  it('sending a prompt immediately creates one Working activity', () => {
+  it('sending a prompt immediately opens a submitted turn', () => {
     let state = createReducerState()
     state = send(state, 'go')
     expect(state.currentPhrase).toBe('Claude Code is working…')
-    expect(state.turn).toMatchObject({ status: 'submitted', activityId: `activity:${SESSION_ID}:t1` })
+    expect(state.turn).toMatchObject({ status: 'submitted', id: 't1' })
   })
 
-  it('a generic thinking/spinner event updates the same activity rather than adding another', () => {
+  it('turn_started moves a submitted turn to working', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    state = applyEnvelope(state, envelope({ type: 'activity', label: 'Pondering', elapsedMs: 1000 }, 1)).state
-    expect(state.currentPhrase).toBe('Thinking…')
+    state = applyEnvelope(state, envelope({ type: 'turn_started' }, 1)).state
     expect(state.turn?.status).toBe('working')
   })
 
-  it('tool activity updates the phrase and appends one tool-activity item per completed call', () => {
+  it('an activity_started/updated pair updates the phrase rather than adding a second row', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    state = applyEnvelope(state, envelope({ type: 'tool_activity', label: 'Read(a.ts)', status: 'done' }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'activity_started', activityId: 'a1', label: 'Read(a.ts)' }, 1)).state
     expect(state.currentPhrase).toBe('Reading files…')
     expect(state.items.filter((i) => i.kind === 'tool-activity')).toHaveLength(1)
 
-    state = applyEnvelope(state, envelope({ type: 'tool_activity', label: 'Bash(npm test)', status: 'done' }, 2)).state
+    state = applyEnvelope(state, envelope({ type: 'activity_updated', activityId: 'a1', elapsedMs: 500 }, 2)).state
+    expect(state.items.filter((i) => i.kind === 'tool-activity')).toHaveLength(1)
+  })
+
+  it('tool activity appends one tool-activity item per activityId', () => {
+    let state = createReducerState()
+    state = send(state, 'go')
+    state = applyEnvelope(state, envelope({ type: 'activity_started', activityId: 'a1', label: 'Read(a.ts)', tool: 'Read' }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'activity_completed', activityId: 'a1', label: 'Read(a.ts)', tool: 'Read', status: 'done' }, 2)).state
+    expect(state.items.filter((i) => i.kind === 'tool-activity')).toHaveLength(1)
+
+    state = applyEnvelope(state, envelope({ type: 'activity_started', activityId: 'a2', label: 'Bash(npm test)', tool: 'Bash' }, 3)).state
     expect(state.currentPhrase).toBe('Running command…')
+    state = applyEnvelope(state, envelope({ type: 'activity_completed', activityId: 'a2', label: 'Bash(npm test)', tool: 'Bash', status: 'done' }, 4)).state
     expect(state.items.filter((i) => i.kind === 'tool-activity')).toHaveLength(2)
   })
 
   it('assistant output begins streaming into one assistant message once real text arrives', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    state = applyEnvelope(state, envelope({ type: 'activity', label: 'Pondering' }, 1)).state
-    state = applyEnvelope(state, envelope({ type: 'assistant_message', text: 'Done.' }, 2)).state
+    state = applyEnvelope(state, envelope({ type: 'activity_started', activityId: 'a1', label: 'Pondering' }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Done.' }, 2)).state
     expect(state.turn?.status).toBe('streaming')
     expect(state.items.filter((i) => i.kind === 'assistant')).toHaveLength(1)
   })
 
-  it('completion clears the working state', () => {
+  it('turn_completed clears the working state', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    state = applyEnvelope(state, envelope({ type: 'activity', label: 'Pondering' }, 1)).state
-    state = applyEnvelope(state, envelope({ type: 'session_complete', exitCode: 0 }, 2)).state
+    state = applyEnvelope(state, envelope({ type: 'activity_started', activityId: 'a1', label: 'Pondering' }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'turn_completed' }, 2)).state
     expect(state.currentPhrase).toBeNull()
     expect(state.isBusy).toBe(false)
     expect(state.turn?.status).toBe('complete')
   })
 
-  it('clears the working state even if the CLI returns to input-ready without ever producing assistant text', () => {
+  it('clears the working state even if the turn completes without ever producing assistant text', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    state = applyEnvelope(state, envelope({ type: 'session_complete', exitCode: 0 }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'turn_completed' }, 1)).state
     expect(state.currentPhrase).toBeNull()
     expect(state.isBusy).toBe(false)
   })
 
-  it('an error replaces the working indicator with a visible error item', () => {
+  it('turn_failed replaces the working indicator with a visible error item', () => {
     let state = createReducerState()
     state = send(state, 'go')
-    state = applyEnvelope(state, envelope({ type: 'error', message: 'process crashed' }, 1)).state
+    state = applyEnvelope(state, envelope({ type: 'turn_failed', reason: 'process crashed' }, 1)).state
     expect(state.currentPhrase).toBeNull()
     expect(state.isBusy).toBe(false)
     expect(state.turn?.status).toBe('failed')
@@ -223,28 +305,37 @@ describe('working / thinking state', () => {
   it('the fallback timeout never fires once a turn has already completed normally', () => {
     let state = createReducerState()
     state = send(state, 'go', 't1', 0)
-    state = applyEnvelope(state, envelope({ type: 'session_complete', exitCode: 0 }, 1, 'e1'), 100).state
+    state = applyEnvelope(state, envelope({ type: 'turn_completed' }, 1, 't1', 'e1'), 100).state
     const afterTimeout = forceCompleteStaleTurn(state, 60_000, 999_999)
     expect(afterTimeout).toEqual(state)
   })
 })
 
-describe('pending interactions (unchanged behavior)', () => {
+describe('pending interactions', () => {
   it('keeps at most one pending interaction at a time', () => {
     let state = createReducerState()
+    state = send(state, 'go')
     state = applyEnvelope(
       state,
-      envelope({ type: 'permission_required', interactionId: 'i1', prompt: 'Allow?', options: [{ id: 'y', label: 'Yes' }] }, 1)
+      envelope({ type: 'interaction_required', interaction: { kind: 'permission', interactionId: 'i1', prompt: 'Allow?', options: [{ id: 'y', label: 'Yes' }] } }, 1)
     ).state
     expect(state.pendingInteraction).toEqual({ kind: 'permission', interactionId: 'i1', prompt: 'Allow?', options: [{ id: 'y', label: 'Yes' }] })
 
-    state = applyEnvelope(state, envelope({ type: 'choice_required', interactionId: 'i2', prompt: 'Pick one', options: [] }, 2)).state
+    state = applyEnvelope(
+      state,
+      envelope({ type: 'interaction_required', interaction: { kind: 'choice', interactionId: 'i2', prompt: 'Pick one', options: [] } }, 2)
+    ).state
     expect(state.pendingInteraction?.kind).toBe('choice')
+    expect(state.turn?.status).toBe('awaiting_interaction')
   })
 
   it('clears the pending interaction only when explicitly resolved', () => {
     let state = createReducerState()
-    state = applyEnvelope(state, envelope({ type: 'terminal_attention_required', reason: 'unknown prompt' }, 1)).state
+    state = send(state, 'go')
+    state = applyEnvelope(
+      state,
+      envelope({ type: 'interaction_required', interaction: { kind: 'terminal_attention', interactionId: 'i1', reason: 'unknown prompt' } }, 1)
+    ).state
     expect(state.pendingInteraction).not.toBeNull()
     state = clearPendingInteraction(state)
     expect(state.pendingInteraction).toBeNull()
@@ -252,14 +343,18 @@ describe('pending interactions (unchanged behavior)', () => {
 })
 
 describe('activity aggregate summary (AgentActivityTracker, reused as-is)', () => {
-  it('turns an in-order stream of tool_activity events into the "Worked for Ns · Read N files · Edited N files" summary', () => {
+  it('turns an in-order stream of activity events into the "Worked for Ns · Read N files · Edited N files" summary', () => {
     let state = createReducerState()
     state = send(state, 'go', 't1', 0)
-    const events: AgentEvent[] = [
-      { type: 'activity', label: 'Pondering', elapsedMs: 12000 },
-      { type: 'tool_activity', label: 'Read(a.ts)', status: 'done' },
-      { type: 'tool_activity', label: 'Read(b.ts)', status: 'done' },
-      { type: 'tool_activity', label: 'Write(c.ts)', status: 'done' }
+    const events: Omit<AgentEvent, 'sessionId' | 'turnId'>[] = [
+      { type: 'activity_started', activityId: 'a0', label: 'Pondering' },
+      { type: 'activity_updated', activityId: 'a0', elapsedMs: 12000 },
+      { type: 'activity_started', activityId: 'a1', label: 'Read(a.ts)', tool: 'Read' },
+      { type: 'activity_completed', activityId: 'a1', label: 'Read(a.ts)', tool: 'Read', status: 'done' },
+      { type: 'activity_started', activityId: 'a2', label: 'Read(b.ts)', tool: 'Read' },
+      { type: 'activity_completed', activityId: 'a2', label: 'Read(b.ts)', tool: 'Read', status: 'done' },
+      { type: 'activity_started', activityId: 'a3', label: 'Write(c.ts)', tool: 'Write' },
+      { type: 'activity_completed', activityId: 'a3', label: 'Write(c.ts)', tool: 'Write', status: 'done' }
     ]
     let seq = 1
     for (const e of events) state = applyEnvelope(state, envelope(e, seq++)).state

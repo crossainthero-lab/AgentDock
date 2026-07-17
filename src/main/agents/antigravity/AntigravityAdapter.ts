@@ -5,6 +5,15 @@
 // interactively and continue the session") primes the first turn; later
 // turns write into the same live PTY.
 //
+// This is the one remaining PTY-classified agent — Claude and Codex moved
+// to structured JSON transports (see ClaudeAdapter/CodexAdapter) and no
+// longer touch any of TerminalSessionController/TerminalScreenBuffer/
+// conflict-integration/classifiers. AntigravityClassifier still classifies
+// the raw screen into the old flat vocabulary (ClassifiedScreenEvent, see
+// classified-event.ts); AntigravityEventMapper is the one place that
+// translates that into the shared, turn-scoped AgentEvent model everything
+// else (including Claude/Codex) speaks.
+//
 // Permission mode is one of agy's own real flag values (see
 // capability-registry.ts):
 //   accept-edits -> --mode accept-edits
@@ -15,7 +24,8 @@
 // Known limitation: no cross-AgentDock-restart continuation is implemented
 // (agy does support `--continue`/`-c`, but wiring it up reliably requires
 // verifying agy's actual resume semantics, which wasn't done here) — each
-// fresh AgentDock session starts a fresh agy conversation.
+// fresh AgentDock session starts a fresh agy conversation, and
+// getNativeSessionId() always returns null.
 import type { AgentEvent } from '@shared/events/agent-event'
 import type { AgentDetection } from '@shared/types'
 import { detectionService } from '../../services/detection-service'
@@ -35,6 +45,7 @@ import {
 } from '../shared/conflict-integration'
 import { AntigravityClassifier } from './AntigravityClassifier'
 import { AntigravityInputTranslator } from './AntigravityInputTranslator'
+import { AntigravityEventMapper, createAntigravityMapperState, type AntigravityMapperState } from './AntigravityEventMapper'
 
 function permissionArgs(mode: AgentRunContext['permissionMode']): string[] {
   switch (mode) {
@@ -57,6 +68,8 @@ class AntigravityRunHandle implements AgentRunHandle {
   private readonly classifier = new AntigravityClassifier()
   private conflictState: ConflictState = createConflictState()
   private busyState: BusyHeartbeatState = createBusyHeartbeatState()
+  private mapperState: AntigravityMapperState = createAntigravityMapperState()
+  private currentTurnId = ''
 
   constructor(private readonly ctx: AgentRunContext) {}
 
@@ -64,9 +77,14 @@ class AntigravityRunHandle implements AgentRunHandle {
     return this.controller?.isRunning ?? false
   }
 
-  send(prompt: string): void {
-    // Reset per turn, not per process — see ClaudeAdapter's send() for why.
+  send(prompt: string, turnId: string): void {
+    // Reset per turn, not per process — the live PTY (and its controller's
+    // listeners) persists across turns, but "has a specific activity been
+    // classified yet" and "which message is this turn's deltas going into"
+    // are inherently scoped to the turn currently in flight.
     this.busyState = createBusyHeartbeatState()
+    this.mapperState = createAntigravityMapperState()
+    this.currentTurnId = turnId
 
     if (this.controller && this.controller.isRunning) {
       console.log(`[antigravity] writing to existing pid=${this.controller.pid}`)
@@ -88,16 +106,23 @@ class AntigravityRunHandle implements AgentRunHandle {
     this.controller.onSnapshot((snapshot) => {
       const classified = this.classifier.classify(snapshot)
       noteClassifiedActivity(this.busyState, classified)
-      const { events, state } = withConflictDetection(this.conflictState, snapshot, classified)
-      this.conflictState = state
+      const { events: withAttention, state: conflictState } = withConflictDetection(this.conflictState, snapshot, classified)
+      this.conflictState = conflictState
+      const { events, state: mapperState } = AntigravityEventMapper.map(withAttention, this.mapperState, this.ctx.session.id, this.currentTurnId)
+      this.mapperState = mapperState
       for (const event of events) this.emit(event)
     })
     this.controller.onBusy(() => {
       const heartbeat = busyHeartbeatEvent(this.busyState)
-      if (heartbeat) this.emit(heartbeat)
+      if (!heartbeat) return
+      const { events, state: mapperState } = AntigravityEventMapper.map([heartbeat], this.mapperState, this.ctx.session.id, this.currentTurnId)
+      this.mapperState = mapperState
+      for (const event of events) this.emit(event)
     })
     this.controller.onExit((info) => {
-      this.emit({ type: 'session_complete', exitCode: info.exitCode })
+      const classified: Parameters<typeof AntigravityEventMapper.map>[0] = [{ type: 'session_complete', exitCode: info.exitCode }]
+      const { events } = AntigravityEventMapper.map(classified, this.mapperState, this.ctx.session.id, this.currentTurnId)
+      for (const event of events) this.emit(event)
       for (const l of this.exitListeners) l(info)
     })
   }
@@ -143,6 +168,11 @@ class AntigravityRunHandle implements AgentRunHandle {
 
   runCommand(): void {
     console.warn('[antigravity] runCommand() called but agy has no known slash commands yet')
+  }
+
+  getNativeSessionId(): string | null {
+    // No verified resume mechanism (see module comment) — always null.
+    return null
   }
 
   private emit(event: AgentEvent): void {

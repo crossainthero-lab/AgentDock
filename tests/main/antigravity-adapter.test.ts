@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent } from '../../src/shared/events/agent-event'
 import type { AgentRunContext } from '../../src/main/agents/agent-adapter'
 
@@ -66,13 +66,9 @@ describe('antigravityAdapter', () => {
     spawnCalls.length = 0
   })
 
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
   it('spawns agy interactively with -i <prompt>', () => {
     const handle = antigravityAdapter.start(ctx)
-    handle.send('fix the bug')
+    handle.send('fix the bug', 't1')
 
     expect(spawnCalls).toHaveLength(1)
     expect(spawnCalls[0].command).toBe('agy')
@@ -81,20 +77,20 @@ describe('antigravityAdapter', () => {
 
   it('maps permission modes to real agy flags', () => {
     const accept = antigravityAdapter.start({ ...ctx, permissionMode: 'accept-edits' })
-    accept.send('go')
+    accept.send('go', 't1')
     expect(spawnCalls[0].args).toEqual(['--mode', 'accept-edits', '-i', 'go'])
 
     const bypass = antigravityAdapter.start({ ...ctx, permissionMode: 'bypass' })
-    bypass.send('go')
+    bypass.send('go', 't2')
     expect(spawnCalls[1].args).toEqual(['--dangerously-skip-permissions', '-i', 'go'])
   })
 
   it('reuses the same live process for a second send() instead of spawning again', () => {
     const handle = antigravityAdapter.start(ctx)
-    handle.send('first turn')
+    handle.send('first turn', 't1')
     expect(spawnCalls).toHaveLength(1)
 
-    handle.send('second turn')
+    handle.send('second turn', 't2')
     expect(spawnCalls).toHaveLength(1)
     expect(spawnCalls[0].proc.write).toHaveBeenCalledWith('second turn\r')
   })
@@ -103,21 +99,38 @@ describe('antigravityAdapter', () => {
     const handle = antigravityAdapter.start(ctx)
     const rawChunks: string[] = []
     handle.onRawData((chunk) => rawChunks.push(chunk))
-    handle.send('hello')
+    handle.send('hello', 't1')
 
     for (const cb of spawnCalls[0].proc._dataListeners) cb('raw chunk')
 
     expect(rawChunks).toContain('raw chunk')
   })
 
-  it('emits session_complete on process exit', () => {
+  it('a clean process exit maps to turn_completed, scoped to the turn in flight', () => {
     const handle = antigravityAdapter.start(ctx)
     const events: AgentEvent[] = []
     handle.onEvent((e) => events.push(e))
-    handle.send('hello')
+    handle.send('hello', 't1')
+
+    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 0, signal: null })
+    expect(events).toContainEqual({ type: 'turn_completed', sessionId: 's1', turnId: 't1' })
+  })
+
+  it('a non-zero process exit maps to turn_failed, never a fabricated turn_completed', () => {
+    const handle = antigravityAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('hello', 't1')
 
     for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 1, signal: null })
-    expect(events).toContainEqual({ type: 'session_complete', exitCode: 1 })
+    expect(events.some((e) => e.type === 'turn_completed')).toBe(false)
+    expect(events).toContainEqual({ type: 'turn_failed', sessionId: 's1', turnId: 't1', reason: 'Antigravity exited with code 1' })
+  })
+
+  it('getNativeSessionId() is always null — no verified resume mechanism', () => {
+    const handle = antigravityAdapter.start(ctx)
+    handle.send('hello', 't1')
+    expect(handle.getNativeSessionId()).toBeNull()
   })
 
   it('reports the real `agy models` list as capabilities', () => {

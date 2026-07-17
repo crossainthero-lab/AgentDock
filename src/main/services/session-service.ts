@@ -6,7 +6,6 @@ import { sessionRepo } from '../db/repositories/session-repo'
 import { messageRepo } from '../db/repositories/message-repo'
 import { workspaceRepo } from '../db/repositories/workspace-repo'
 import { getAdapter } from '../agents/adapter-registry'
-import { getClaudeNativeSessionId } from '../agents/claude/ClaudeAdapter'
 import type { AgentRunHandle } from '../agents/agent-adapter'
 import type { ProcessExitInfo } from './pty-service'
 import { settingsService } from './settings-service'
@@ -62,11 +61,6 @@ function trace(sessionId: string, entry: Omit<TraceEvent, 'sessionId' | 'timesta
   for (const l of listeners) l(full)
 }
 
-function extractToolName(label: string): string {
-  const match = label.match(/^([A-Za-z][\w]*)/)
-  return match ? match[1] : label
-}
-
 export const sessionService = {
   create(input: CreateSessionInput): Session {
     const title = input.title?.trim() || `New ${agentDisplay(input.agentId)} session`
@@ -83,7 +77,7 @@ export const sessionService = {
     return { ...session, messages: messageRepo.listBySession(sessionId) }
   },
 
-  async sendPrompt(sessionId: string, text: string): Promise<void> {
+  async sendPrompt(sessionId: string, text: string, turnId: string): Promise<void> {
     const session = sessionRepo.get(sessionId)
     if (!session) throw new Error('Session not found.')
 
@@ -93,8 +87,10 @@ export const sessionService = {
     let run = running.get(sessionId)
 
     // Reuse the existing live process for this session — only spawn a new
-    // one if there's genuinely nothing running yet (first turn, or the
-    // previous process already exited on its own).
+    // one if there's genuinely nothing running yet. For Claude/Codex's
+    // structured transports this is every turn (each is a one-shot process
+    // that has already exited by the time the next prompt arrives);
+    // Antigravity's PTY stays live across turns, same as before.
     if (!run || !run.handle.isRunning) {
       const settings = settingsService.get()
       const agentSettings = settings.agents[session.agentId]
@@ -102,7 +98,7 @@ export const sessionService = {
       if (!detection.installed || !detection.executablePath) {
         const message = detection.error ?? `${agentDisplay(session.agentId)} is not installed.`
         messageRepo.add(sessionId, 'error', { kind: 'text', text: message })
-        broadcastEvent(sessionId, { type: 'error', message })
+        broadcastEvent(sessionId, { type: 'turn_failed', sessionId, turnId, reason: message })
         sessionRepo.setStatus(sessionId, 'error')
         // Throw (rather than silently returning) so the IPC call this is
         // behind actually rejects — otherwise the renderer has no way to
@@ -124,47 +120,47 @@ export const sessionService = {
 
       const unsubscribeEvent = handle.onEvent((event) => {
         switch (event.type) {
-          case 'assistant_message':
-            // Classifiers emit one assistant_message per settled reply —
-            // the closest available proxy for "this turn is done" since the
-            // CLI is a long-lived process rather than a one-shot invocation
-            // with a real exit per turn.
+          case 'assistant_completed':
             messageRepo.add(sessionId, 'assistant', { kind: 'text', text: event.text })
             broadcastEvent(sessionId, event)
-            sessionRepo.setStatus(sessionId, 'idle')
             return
-          case 'tool_activity': {
-            const tool = extractToolName(event.label)
+          case 'activity_completed': {
+            // Only the settled outcome is persisted — activity_started/
+            // updated are live-only signals (transient "in progress" state
+            // has no meaningful persisted representation, same as the old
+            // model never persisted a 'running' tool_activity).
+            const tool = event.tool ?? event.label
             messageRepo.add(sessionId, 'assistant', {
               kind: 'activity',
               tool,
-              summary: event.status === 'error' ? `${tool} failed` : `Ran ${event.label}`,
+              summary: event.summary ?? (event.status === 'error' ? `${tool} failed` : `Ran ${event.label}`),
               detail: event.label,
               isError: event.status === 'error'
             })
             broadcastEvent(sessionId, event)
             return
           }
-          case 'choice_required':
-          case 'permission_required':
-            pendingInteractions.set(sessionId, {
-              interactionId: event.interactionId,
-              prompt: event.prompt,
-              options: event.options
-            })
-            broadcastEvent(sessionId, event)
-            return
-          case 'error':
-            runState.hadError = true
-            messageRepo.add(sessionId, 'error', { kind: 'text', text: event.message })
-            broadcastEvent(sessionId, event)
-            return
-          case 'session_complete': {
-            if (session.agentId === 'claude-code') {
-              const nativeId = getClaudeNativeSessionId(handle)
-              if (nativeId) sessionRepo.setNativeSessionId(sessionId, nativeId)
+          case 'interaction_required': {
+            const interaction = event.interaction
+            if (interaction.kind === 'choice' || interaction.kind === 'permission') {
+              pendingInteractions.set(sessionId, {
+                interactionId: interaction.interactionId,
+                prompt: interaction.prompt,
+                options: interaction.options
+              })
             }
-            sessionRepo.setStatus(sessionId, runState.hadError ? 'error' : 'idle')
+            broadcastEvent(sessionId, event)
+            return
+          }
+          case 'turn_completed':
+          case 'turn_failed': {
+            const nativeId = handle.getNativeSessionId()
+            if (nativeId) sessionRepo.setNativeSessionId(sessionId, nativeId)
+            if (event.type === 'turn_failed') {
+              runState.hadError = true
+              messageRepo.add(sessionId, 'error', { kind: 'text', text: event.reason })
+            }
+            sessionRepo.setStatus(sessionId, event.type === 'turn_failed' || runState.hadError ? 'error' : 'idle')
             running.delete(sessionId)
             pendingInteractions.delete(sessionId)
             broadcastEvent(sessionId, event)
@@ -196,7 +192,7 @@ export const sessionService = {
     }
 
     trace(sessionId, { kind: 'PTY_WRITE_REQUESTED' })
-    run.handle.send(text)
+    run.handle.send(text, turnId)
     trace(sessionId, { kind: 'PTY_WRITE_SUCCEEDED' })
   },
 

@@ -1,18 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent } from '../../src/shared/events/agent-event'
 import type { AgentRunContext } from '../../src/main/agents/agent-adapter'
 
 interface MockProc {
-  id: string
   pid: number
   isRunning: boolean
-  write: ReturnType<typeof vi.fn>
-  resize: ReturnType<typeof vi.fn>
-  interrupt: ReturnType<typeof vi.fn>
   kill: ReturnType<typeof vi.fn>
-  onData: (cb: (chunk: string) => void) => () => void
+  onLine: (cb: (line: string) => void) => () => void
   onExit: (cb: (info: { exitCode: number | null; signal: number | null }) => void) => () => void
-  _dataListeners: Array<(chunk: string) => void>
+  _lineListeners: Array<(line: string) => void>
   _exitListeners: Array<(info: { exitCode: number | null; signal: number | null }) => void>
 }
 
@@ -20,17 +16,15 @@ const spawnCalls: Array<{ command: string; args: string[]; proc: MockProc }> = [
 
 function makeMockProc(): MockProc {
   const proc: MockProc = {
-    id: `proc-${spawnCalls.length}`,
     pid: 1000 + spawnCalls.length,
     isRunning: true,
-    write: vi.fn(),
-    resize: vi.fn(),
-    interrupt: vi.fn(),
-    kill: vi.fn(),
-    _dataListeners: [],
+    kill: vi.fn(() => {
+      proc.isRunning = false
+    }),
+    _lineListeners: [],
     _exitListeners: [],
-    onData(cb) {
-      proc._dataListeners.push(cb)
+    onLine(cb) {
+      proc._lineListeners.push(cb)
       return () => {}
     },
     onExit(cb) {
@@ -41,17 +35,22 @@ function makeMockProc(): MockProc {
   return proc
 }
 
-vi.mock('../../src/main/services/pty-service', () => ({
-  ptyService: {
+function emitLine(proc: MockProc, obj: unknown): void {
+  for (const cb of proc._lineListeners) cb(JSON.stringify(obj))
+}
+
+vi.mock('../../src/main/services/child-process-service', () => ({
+  childProcessService: {
     spawn: (command: string, args: string[]) => {
       const proc = makeMockProc()
       spawnCalls.push({ command, args, proc })
       return proc
-    }
+    },
+    killAll: vi.fn()
   }
 }))
 
-import { claudeAdapter, getClaudeNativeSessionId } from '../../src/main/agents/claude/ClaudeAdapter'
+import { claudeAdapter } from '../../src/main/agents/claude/ClaudeAdapter'
 
 const ctx: AgentRunContext = {
   session: { id: 's1', workspaceId: 'w1', agentId: 'claude-code', title: 't', status: 'idle', createdAt: '', updatedAt: '' },
@@ -66,122 +65,149 @@ describe('claudeAdapter', () => {
     spawnCalls.length = 0
   })
 
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('spawns claude interactively with --ax-screen-reader and the prompt in argv', () => {
+  it('spawns a one-shot structured process with the prompt in argv, no --input-format', () => {
     const handle = claudeAdapter.start(ctx)
-    handle.send('do the thing')
+    handle.send('do the thing', 't1')
 
     expect(spawnCalls).toHaveLength(1)
     expect(spawnCalls[0].command).toBe('claude')
-    expect(spawnCalls[0].args).toEqual(['--ax-screen-reader', 'do the thing'])
+    expect(spawnCalls[0].args).toEqual(['-p', 'do the thing', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'])
   })
 
-  it('adds --continue when this session previously had a live process', () => {
-    const handle = claudeAdapter.start({ ...ctx, nativeSessionId: 'claude-session-started' })
-    handle.send('continue please')
+  it('adds --resume with the persisted native session id, not a sentinel', () => {
+    const handle = claudeAdapter.start({ ...ctx, nativeSessionId: 'a-real-uuid-1234' })
+    handle.send('continue please', 't1')
 
-    expect(spawnCalls[0].args).toEqual(['--ax-screen-reader', '--continue', 'continue please'])
+    expect(spawnCalls[0].args).toContain('--resume')
+    expect(spawnCalls[0].args).toContain('a-real-uuid-1234')
   })
 
   it('adds --permission-mode when not default', () => {
     const handle = claudeAdapter.start({ ...ctx, permissionMode: 'plan' })
-    handle.send('go')
+    handle.send('go', 't1')
 
-    expect(spawnCalls[0].args).toEqual(['--ax-screen-reader', '--permission-mode', 'plan', 'go'])
+    expect(spawnCalls[0].args).toContain('--permission-mode')
+    expect(spawnCalls[0].args).toContain('plan')
   })
 
-  it('reuses the same live process for a second send() instead of spawning again', () => {
+  it('spawns a fresh process every turn — never reuses a live process across turns', () => {
     const handle = claudeAdapter.start(ctx)
-    handle.send('first turn')
-    expect(spawnCalls).toHaveLength(1)
-
-    handle.send('second turn')
-    expect(spawnCalls).toHaveLength(1) // still just one spawn
-    expect(spawnCalls[0].proc.write).toHaveBeenCalledWith('second turn\r')
-  })
-
-  it('wraps multiline prompts in bracketed paste before submitting with \\r', () => {
-    const handle = claudeAdapter.start(ctx)
-    handle.send('first turn')
-    handle.send('line one\nline two')
-
-    expect(spawnCalls[0].proc.write).toHaveBeenCalledWith('\x1b[200~line one\nline two\x1b[201~\r')
-  })
-
-  it('spawns again if the previous process already exited', () => {
-    const handle = claudeAdapter.start(ctx)
-    handle.send('first turn')
-    spawnCalls[0].proc.isRunning = false
+    handle.send('first turn', 't1')
+    emitLine(spawnCalls[0].proc, { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 's' })
     for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 0, signal: null })
 
-    handle.send('second turn, new process')
+    handle.send('second turn', 't2')
     expect(spawnCalls).toHaveLength(2)
-    expect(spawnCalls[1].args).toContain('second turn, new process')
   })
 
-  it('always forwards raw data via onRawData, regardless of content', () => {
+  it('interrupt() kills the in-flight process', () => {
     const handle = claudeAdapter.start(ctx)
-    const rawChunks: string[] = []
-    handle.onRawData((chunk) => rawChunks.push(chunk))
-    handle.send('hello')
+    handle.send('go', 't1')
+    handle.interrupt()
 
-    for (const cb of spawnCalls[0].proc._dataListeners) cb('some \x1b[31mraw\x1b[0m output')
-
-    expect(rawChunks).toContain('some \x1b[31mraw\x1b[0m output')
+    expect(spawnCalls[0].proc.kill).toHaveBeenCalled()
   })
 
-  it('classifies a settled "claude: <reply>" line into one assistant_message after the idle window', async () => {
-    // Real timers deliberately, not fake ones — the screen buffer's write()
-    // is processed asynchronously by @xterm/headless, and the idle debounce
-    // that gates snapshotting is a real setTimeout in TerminalSessionController.
+  it('maps a full turn (init, deltas, result) into turn_started, assistant_delta(s), turn_completed — no duplication', () => {
     const handle = claudeAdapter.start(ctx)
     const events: AgentEvent[] = []
     handle.onEvent((e) => events.push(e))
-    handle.send('hello')
+    handle.send('say pong', 't1')
 
-    for (const cb of spawnCalls[0].proc._dataListeners) {
-      cb('you: hello\r\n')
-      // Real Claude Code sessions always print a "<verb> for Ns" footer and
-      // status bar right after the reply in the same flush — matching that
-      // shape here (rather than ending exactly on the reply line) is what
-      // lets the classifier treat "claude: ..." as settled instead of
-      // holding it back as a possibly-still-live last line.
-      cb('claude: Hi there, how can I help?\r\nBrewed for 1s\r\nmanual mode on\r\n')
-    }
-    expect(events.some((e) => e.type === 'assistant_message')).toBe(false)
+    const proc = spawnCalls[0].proc
+    emitLine(proc, { type: 'system', subtype: 'init', session_id: 'real-session-id' })
+    emitLine(proc, { type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } })
+    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } })
+    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'p' } } })
+    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ong' } } })
+    emitLine(proc, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'pong' }] } })
+    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
+    emitLine(proc, { type: 'stream_event', event: { type: 'message_stop' } })
+    emitLine(proc, { type: 'result', subtype: 'success', is_error: false, result: 'pong', session_id: 'real-session-id' })
 
-    await new Promise((resolve) => setTimeout(resolve, 700))
-
-    const textEvents = events.filter((e) => e.type === 'assistant_message')
-    expect(textEvents).toHaveLength(1)
-    expect(textEvents[0]).toMatchObject({ type: 'assistant_message', text: 'Hi there, how can I help?' })
+    expect(events).toEqual([
+      { type: 'turn_started', sessionId: 's1', turnId: 't1' },
+      { type: 'assistant_delta', sessionId: 's1', turnId: 't1', messageId: 'm1', textDelta: 'p' },
+      { type: 'assistant_delta', sessionId: 's1', turnId: 't1', messageId: 'm1', textDelta: 'ong' },
+      { type: 'assistant_completed', sessionId: 's1', turnId: 't1', messageId: 'm1', text: 'pong' },
+      { type: 'turn_completed', sessionId: 's1', turnId: 't1', result: 'pong' }
+    ])
+    expect(handle.getNativeSessionId()).toBe('real-session-id')
   })
 
-  it('emits session_complete on process exit', () => {
+  it('captures the real session_id, not a boolean sentinel', () => {
+    const handle = claudeAdapter.start(ctx)
+    expect(handle.getNativeSessionId()).toBeNull()
+    handle.send('hello', 't1')
+    emitLine(spawnCalls[0].proc, { type: 'system', subtype: 'init', session_id: 'abc-123' })
+    expect(handle.getNativeSessionId()).toBe('abc-123')
+  })
+
+  it('a well-behaved turn completes only via the structured result event, not process exit', () => {
     const handle = claudeAdapter.start(ctx)
     const events: AgentEvent[] = []
     handle.onEvent((e) => events.push(e))
-    handle.send('hello')
+    handle.send('hello', 't1')
 
+    emitLine(spawnCalls[0].proc, { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 's' })
+    expect(events).toContainEqual({ type: 'turn_completed', sessionId: 's1', turnId: 't1', result: 'ok' })
+
+    // Process exit after a well-behaved result must not add a second/duplicate completion.
     for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 0, signal: null })
-
-    expect(events).toContainEqual({ type: 'session_complete', exitCode: 0 })
+    expect(events.filter((e) => e.type === 'turn_completed' || e.type === 'turn_failed')).toHaveLength(1)
   })
 
-  it('exposes a "has started" marker via getClaudeNativeSessionId once a process has run', () => {
+  it('a non-success result maps to turn_failed', () => {
     const handle = claudeAdapter.start(ctx)
-    expect(getClaudeNativeSessionId(handle)).toBeNull()
-    handle.send('hello')
-    expect(getClaudeNativeSessionId(handle)).toBe('claude-session-started')
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('hello', 't1')
+
+    emitLine(spawnCalls[0].proc, { type: 'result', subtype: 'error', is_error: true, result: 'Something broke', session_id: 's' })
+    expect(events).toContainEqual({ type: 'turn_failed', sessionId: 's1', turnId: 't1', reason: 'Something broke' })
   })
 
-  it('reports real capabilities (models/permission modes) grounded in the CLI', () => {
+  it('process exit without any result event synthesizes turn_failed, never a fabricated turn_completed', () => {
+    const handle = claudeAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('hello', 't1')
+
+    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 1, signal: null })
+
+    expect(events.some((e) => e.type === 'turn_completed')).toBe(false)
+    expect(events).toContainEqual({
+      type: 'turn_failed',
+      sessionId: 's1',
+      turnId: 't1',
+      reason: 'Claude exited unexpectedly (code 1) without completing this turn.'
+    })
+  })
+
+  it('a tool_use content block never produces assistant text, only activity events', () => {
+    const handle = claudeAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('run ls', 't1')
+
+    const proc = spawnCalls[0].proc
+    emitLine(proc, { type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } })
+    emitLine(proc, {
+      type: 'stream_event',
+      event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool_1', name: 'Bash', input: {} } }
+    })
+    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } } })
+    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
+
+    expect(events).toEqual([
+      { type: 'activity_started', sessionId: 's1', turnId: 't1', activityId: 'tool_1', label: 'Bash', tool: 'Bash' },
+      { type: 'activity_completed', sessionId: 's1', turnId: 't1', activityId: 'tool_1', label: 'Bash', tool: 'Bash', status: 'done' }
+    ])
+  })
+
+  it('reports real capabilities (permission modes) grounded in the CLI', () => {
     const caps = claudeAdapter.getCapabilities()
     expect(caps.agentId).toBe('claude-code')
-    expect(caps.models.length).toBeGreaterThan(0)
-    expect(caps.supportsLiveModelSwitch).toBe(true)
+    expect(caps.permissionModes.length).toBeGreaterThan(0)
   })
 })

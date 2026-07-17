@@ -28,7 +28,7 @@
 //                                         prose
 //   ● <Verb>(<args>) (ctrl+o to expand) -- a real tool call (-> tool_activity)
 //   ──── / > / ? for shortcuts ...    -- idle composer chrome after a reply
-import type { AgentEvent } from '@shared/events/agent-event'
+import type { ClassifiedScreenEvent } from './classified-event'
 import type { ScreenSnapshot } from '../../terminal/TerminalScreenBuffer'
 import { detectAuthRequired, detectGenericInteraction } from '../../terminal/TerminalInteractionDetector'
 
@@ -59,9 +59,9 @@ export class AntigravityClassifier {
     this.expectingThoughtLabel = false
   }
 
-  classify(snapshot: ScreenSnapshot): AgentEvent[] {
+  classify(snapshot: ScreenSnapshot): ClassifiedScreenEvent[] {
     const { lines } = snapshot
-    const events: AgentEvent[] = []
+    const events: ClassifiedScreenEvent[] = []
 
     const authMessage = detectAuthRequired(lines)
     if (authMessage) {
@@ -100,7 +100,7 @@ export class AntigravityClassifier {
     return events
   }
 
-  private emitContent(rawLines: string[], events: AgentEvent[]): void {
+  private emitContent(rawLines: string[], events: ClassifiedScreenEvent[]): void {
     const proseLines: string[] = []
     const flushProse = (): void => {
       const text = proseLines.join('\n').trim()

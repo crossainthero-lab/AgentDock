@@ -1,9 +1,17 @@
-// Single owner of a session's PTY. Everything that needs the live process —
-// the classification pipeline (via onSnapshot), the Terminal drawer fallback
-// (via onRawData), and capability actions (write/resize/interrupt) — goes
-// through one controller per session, so there is exactly one PTY no matter
-// how many consumers are attached, and "Open terminal" always reveals the
-// literal same session (never a second process, never a disconnected shell).
+// ANTIGRAVITY-ONLY. Single owner of a session's PTY. Everything that needs
+// the live process — the classification pipeline (via onSnapshot), the
+// Terminal drawer fallback (via onRawData), and capability actions
+// (write/resize/interrupt) — goes through one controller per session, so
+// there is exactly one PTY no matter how many consumers are attached, and
+// "Open terminal" always reveals the literal same session (never a second
+// process, never a disconnected shell).
+//
+// Claude and Codex moved to structured JSON transports (see
+// ClaudeStreamJsonTransport/CodexJsonlTransport, which use
+// child-process-service.ts instead) and no longer touch this module or any
+// of its terminal/*.ts siblings — this file, TerminalScreenBuffer.ts,
+// TerminalInteractionDetector.ts, and TranslationConflictDetector.ts exist
+// solely to support Antigravity's PTY-based classification path.
 import { ptyService, type ManagedProcess, type ProcessExitInfo, type SpawnOptions } from '../services/pty-service'
 import { TerminalScreenBuffer, type ScreenSnapshot } from './TerminalScreenBuffer'
 

@@ -1,10 +1,13 @@
-// Small shared glue between a classifier's output and
+// ANTIGRAVITY-ONLY (see TerminalSessionController.ts's module comment) —
+// Claude/Codex's structured transports get real turn/tool lifecycle events
+// directly from the protocol and have no use for either half of this file.
+// Small glue between a classifier's output and
 // TranslationConflictDetector, used identically by every adapter: if a
 // classifier produced nothing for this snapshot and the screen looks stuck
 // (unchanged, cursor not at a fresh line) for long enough, append a
 // terminal_attention_required event so the UI can offer the terminal
 // fallback instead of silently doing nothing.
-import type { AgentEvent } from '@shared/events/agent-event'
+import type { ClassifiedScreenEvent } from '../antigravity/classified-event'
 import type { ScreenSnapshot } from '../../terminal/TerminalScreenBuffer'
 import { checkTranslationConflict, createConflictState, type ConflictState } from '../../terminal/TranslationConflictDetector'
 
@@ -14,8 +17,8 @@ export type { ConflictState }
 export function withConflictDetection(
   state: ConflictState,
   snapshot: ScreenSnapshot,
-  events: AgentEvent[]
-): { events: AgentEvent[]; state: ConflictState } {
+  events: ClassifiedScreenEvent[]
+): { events: ClassifiedScreenEvent[]; state: ConflictState } {
   const handled = events.length > 0
   const result = checkTranslationConflict(state, snapshot, handled)
   if (!result.attentionNeeded) {
@@ -53,7 +56,7 @@ export function createBusyHeartbeatState(): BusyHeartbeatState {
   return { hasSpecificActivity: false }
 }
 
-export function noteClassifiedActivity(state: BusyHeartbeatState, events: AgentEvent[]): void {
+export function noteClassifiedActivity(state: BusyHeartbeatState, events: ClassifiedScreenEvent[]): void {
   if (events.some((e) => e.type === 'activity' || e.type === 'tool_activity')) {
     state.hasSpecificActivity = true
   }
@@ -61,6 +64,6 @@ export function noteClassifiedActivity(state: BusyHeartbeatState, events: AgentE
 
 /** Returns the generic heartbeat event, or null if a specific one has
  *  already been seen this turn (nothing to add). */
-export function busyHeartbeatEvent(state: BusyHeartbeatState): AgentEvent | null {
+export function busyHeartbeatEvent(state: BusyHeartbeatState): ClassifiedScreenEvent | null {
   return state.hasSpecificActivity ? null : { type: 'activity', label: 'Working' }
 }

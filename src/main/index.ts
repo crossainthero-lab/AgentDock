@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { initDatabase, closeDatabase } from './db/database'
 import { settingsService } from './services/settings-service'
 import { ptyService } from './services/pty-service'
+import { childProcessService } from './services/child-process-service'
 import { loadWindowState, saveWindowState } from './window-state'
 import { registerAllIpc } from './ipc'
 
@@ -85,11 +86,13 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   ptyService.killAll()
+  childProcessService.killAll()
   closeDatabase()
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
   ptyService.killAll()
+  childProcessService.killAll()
   closeDatabase()
 })

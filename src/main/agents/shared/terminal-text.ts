@@ -1,5 +1,7 @@
-// Generic helpers shared by every adapter for writing into an interactive
-// process's stdin.
+// ANTIGRAVITY-ONLY. PTY-stdin-writing helpers — Claude and Codex's
+// structured JSON transports pass prompts as plain argv/JSON, not
+// terminal-encoded keystrokes, so only AntigravityAdapter/
+// AntigravityInputTranslator import this anymore.
 const ESC = String.fromCharCode(0x1b)
 
 /**

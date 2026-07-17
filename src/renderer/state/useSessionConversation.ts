@@ -44,7 +44,7 @@ export interface SessionConversationActions {
 const EMPTY_REDUCER_STATE = createReducerState()
 const MAX_TRACE_ENTRIES = 300
 /** Fallback only — see forceCompleteStaleTurn's own doc comment. Never the
- *  primary completion signal (session_complete/error are). */
+ *  primary completion signal (turn_completed/turn_failed are). */
 const MAX_TURN_AGE_MS = 3 * 60 * 1000
 const STALE_TURN_CHECK_MS = 15_000
 
@@ -77,13 +77,21 @@ function traceForAcceptedEvent(
   event: AgentEvent
 ): Array<Omit<TraceEvent, 'sessionId' | 'timestamp'>> {
   const turnId = next.turn?.id ?? prev.turn?.id
-  if (event.type === 'assistant_message') {
-    return [{ kind: prev.turn?.assistantMessageId ? 'ASSISTANT_MESSAGE_UPDATED' : 'ASSISTANT_MESSAGE_CREATED', turnId }]
+  if (event.type === 'assistant_delta') {
+    // Diagnostic labeling only, not correctness-critical — approximates
+    // "first delta of the turn" via the turn's pre-event status (the
+    // reducer flips status to 'streaming' on the very first delta it
+    // applies), rather than reaching into the reducer's internal per-message
+    // item-id scheme.
+    return [{ kind: prev.turn?.status === 'streaming' ? 'ASSISTANT_MESSAGE_UPDATED' : 'ASSISTANT_MESSAGE_CREATED', turnId }]
   }
-  if (event.type === 'activity' || event.type === 'tool_activity') {
-    return [{ kind: prev.turn?.status === 'submitted' ? 'ACTIVITY_CREATED' : 'ACTIVITY_UPDATED', turnId }]
+  if (event.type === 'activity_started') {
+    return [{ kind: 'ACTIVITY_CREATED', turnId }]
   }
-  if (event.type === 'session_complete' || event.type === 'error') {
+  if (event.type === 'activity_updated' || event.type === 'activity_completed') {
+    return [{ kind: 'ACTIVITY_UPDATED', turnId }]
+  }
+  if (event.type === 'turn_completed' || event.type === 'turn_failed') {
     return [{ kind: 'TURN_COMPLETED', turnId }]
   }
   return []
@@ -197,7 +205,7 @@ export function useSessionConversation(sessionId: string | null): SessionConvers
     pushTrace({ kind: 'ACTIVITY_CREATED', turnId })
 
     try {
-      await getAgentDock().session.sendPrompt(sessionId, text)
+      await getAgentDock().session.sendPrompt(sessionId, text, turnId)
       setReducerState((prev) => markSent(prev, userMessageId))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -218,7 +226,7 @@ export function useSessionConversation(sessionId: string | null): SessionConvers
     pushTrace({ kind: 'ACTIVITY_CREATED', turnId })
 
     try {
-      await getAgentDock().session.sendPrompt(sessionId, text)
+      await getAgentDock().session.sendPrompt(sessionId, text, turnId)
       setReducerState((prev) => markSent(prev, userMessageId))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

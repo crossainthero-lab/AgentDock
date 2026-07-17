@@ -1,136 +1,82 @@
-// Claude Code adapter — drives a persistent, genuinely interactive `claude`
-// session inside a real PTY for the lifetime of the AgentDock session.
-// `--ax-screen-reader` (a real, documented flag) asks for flat,
-// borderless, animation-free output — verified against a real session to be
-// dramatically easier to classify than the full decorated TUI (plain
-// "you:"/"claude:"/"tool:" prefixed lines and "Permission Required:" blocks
-// instead of box-drawing art). The first turn's prompt is passed as the
-// trailing positional argv `[prompt]`; later turns write into the same PTY.
+// Claude Code adapter — structured JSON transport. Each turn spawns a fresh
+// non-interactive `claude -p` process (see ClaudeStreamJsonTransport),
+// parses its newline-delimited stream-json output directly (see
+// ClaudeEventMapper) into the shared AgentEvent vocabulary, and resumes the
+// same native conversation on the next turn via the real `session_id`
+// captured from the first turn's `system init` event. No PTY, no terminal
+// screen classification.
 import type { AgentEvent } from '@shared/events/agent-event'
 import type { AgentDetection } from '@shared/types'
 import { detectionService } from '../../services/detection-service'
 import type { ProcessExitInfo } from '../../services/pty-service'
-import { createTerminalSessionController, type TerminalSessionController } from '../../terminal/TerminalSessionController'
-import { formatPromptForPty } from '../shared/terminal-text'
+import { ClaudeStreamJsonTransport } from './ClaudeStreamJsonTransport'
+import { ClaudeEventMapper, createClaudeMapperState, type ClaudeMapperState } from './ClaudeEventMapper'
 import type { AgentAdapter, AgentRunContext, AgentRunHandle } from '../agent-adapter'
 import { getCapabilities } from '../capability-registry'
-import {
-  busyHeartbeatEvent,
-  createBusyHeartbeatState,
-  createConflictState,
-  noteClassifiedActivity,
-  withConflictDetection,
-  type BusyHeartbeatState,
-  type ConflictState
-} from '../shared/conflict-integration'
-import { ClaudeClassifier } from './ClaudeClassifier'
-import { ClaudeInputTranslator } from './ClaudeInputTranslator'
-
-/** Sentinel stored in the `nativeSessionId` DB column meaning "this session
- *  has successfully started a Claude process before" — used to decide
- *  whether to pass `--continue` if AgentDock restarts and reconnects. */
-const HAS_PRIOR_SESSION_MARKER = 'claude-session-started'
-
-interface PendingAutoSelect {
-  kind: 'model'
-  modelId: string
-}
 
 class ClaudeRunHandle implements AgentRunHandle {
-  private controller: TerminalSessionController | null = null
+  private transport: ClaudeStreamJsonTransport | null = null
+  private mapperState: ClaudeMapperState = createClaudeMapperState()
+  private capturedNativeSessionId: string | null = null
+  private interruptedByUser = false
+  private pendingModelId: string | null = null
   private readonly eventListeners = new Set<(event: AgentEvent) => void>()
-  private readonly rawDataListeners = new Set<(chunk: string) => void>()
   private readonly exitListeners = new Set<(info: ProcessExitInfo) => void>()
-  private readonly classifier = new ClaudeClassifier()
-  private conflictState: ConflictState = createConflictState()
-  private busyState: BusyHeartbeatState = createBusyHeartbeatState()
-  private pendingAutoSelect: PendingAutoSelect | null = null
-  hasStarted = false
 
   constructor(private readonly ctx: AgentRunContext) {}
 
   get isRunning(): boolean {
-    return this.controller?.isRunning ?? false
+    return this.transport?.isRunning ?? false
   }
 
-  send(prompt: string): void {
-    // Reset per turn, not per process — the live PTY (and its controller's
-    // listeners) persists across turns, but "has a specific activity been
-    // classified yet" is inherently scoped to the turn currently in flight.
-    this.busyState = createBusyHeartbeatState()
+  send(prompt: string, turnId: string): void {
+    this.interruptedByUser = false
+    this.mapperState = createClaudeMapperState()
 
-    if (this.controller && this.controller.isRunning) {
-      console.log(`[claude-code] writing to existing pid=${this.controller.pid}`)
-      this.controller.write(formatPromptForPty(prompt))
-      return
-    }
-
-    const args: string[] = ['--ax-screen-reader']
-    if (this.ctx.permissionMode !== 'default') {
-      args.push('--permission-mode', this.ctx.permissionMode)
-    }
-    if (this.ctx.nativeSessionId === HAS_PRIOR_SESSION_MARKER) {
-      args.push('--continue')
-    }
-    args.push(prompt)
-
-    const redactedArgs = [...args.slice(0, -1), '<prompt>']
-    console.log(`[claude-code] launching interactive session, args (prompt redacted): ${JSON.stringify(redactedArgs)}`)
-    this.controller = createTerminalSessionController(this.ctx.executablePath, args, { cwd: this.ctx.workspacePath })
-    this.hasStarted = true
-    this.classifier.reset()
-    this.conflictState = createConflictState()
-
-    this.controller.onRawData((chunk) => {
-      for (const l of this.rawDataListeners) l(chunk)
+    const transport = new ClaudeStreamJsonTransport(this.ctx.executablePath, {
+      cwd: this.ctx.workspacePath,
+      permissionMode: this.ctx.permissionMode,
+      nativeSessionId: this.ctx.nativeSessionId,
+      modelId: this.pendingModelId
     })
-    this.controller.onSnapshot((snapshot) => {
-      const classified = this.classifier.classify(snapshot)
-      noteClassifiedActivity(this.busyState, classified)
-      const { events, state } = withConflictDetection(this.conflictState, snapshot, classified)
-      this.conflictState = state
-      this.dispatch(events)
-    })
-    this.controller.onBusy(() => {
-      const heartbeat = busyHeartbeatEvent(this.busyState)
-      if (heartbeat) this.emit(heartbeat)
-    })
-    this.controller.onExit((info) => {
-      this.emit({ type: 'session_complete', exitCode: info.exitCode })
-      for (const l of this.exitListeners) l(info)
-    })
-  }
+    this.pendingModelId = null
+    this.transport = transport
 
-  private dispatch(events: AgentEvent[]): void {
-    for (const event of events) {
-      if (this.pendingAutoSelect && (event.type === 'choice_required' || event.type === 'permission_required')) {
-        // The user already told us what they want via setModel() — answer
-        // the resulting menu ourselves instead of surfacing a second card.
-        const auto = this.pendingAutoSelect
-        this.pendingAutoSelect = null
-        if (auto.kind === 'model') {
-          this.controller?.write(ClaudeInputTranslator.formatModelSelection(auto.modelId))
-        }
-        continue
+    transport.onLine((line) => {
+      const { events, state, capturedSessionId } = ClaudeEventMapper.mapLine(line, this.mapperState, this.ctx.session.id, turnId)
+      this.mapperState = state
+      if (capturedSessionId) this.capturedNativeSessionId = capturedSessionId
+      for (const event of events) this.emit(event)
+    })
+
+    transport.onExit((info) => {
+      if (!this.mapperState.sawResult) {
+        const reason = this.interruptedByUser
+          ? 'Interrupted by user.'
+          : `Claude exited unexpectedly (code ${info.exitCode ?? 'unknown'}) without completing this turn.`
+        this.emit({ type: 'turn_failed', sessionId: this.ctx.session.id, turnId, reason })
       }
-      this.emit(event)
-    }
+      for (const listener of this.exitListeners) listener(info)
+    })
+
+    transport.start(prompt)
   }
 
-  write(data: string): void {
-    this.controller?.write(data)
+  write(): void {
+    console.warn('[claude] write() is a no-op — the structured transport has no PTY to write into')
   }
 
-  resize(cols: number, rows: number): void {
-    this.controller?.resize(cols, rows)
+  resize(): void {
+    // No-op — no PTY, nothing to resize.
   }
 
   interrupt(): void {
-    this.controller?.interrupt()
+    this.interruptedByUser = true
+    this.transport?.kill()
   }
 
   stop(): void {
-    this.controller?.kill()
+    this.transport?.kill()
   }
 
   onEvent(cb: (event: AgentEvent) => void): () => void {
@@ -138,9 +84,10 @@ class ClaudeRunHandle implements AgentRunHandle {
     return () => this.eventListeners.delete(cb)
   }
 
-  onRawData(cb: (chunk: string) => void): () => void {
-    this.rawDataListeners.add(cb)
-    return () => this.rawDataListeners.delete(cb)
+  onRawData(): () => void {
+    // Never fires — Claude sessions have no PTY/raw screen to relay, and
+    // the Terminal drawer is hidden for structuredOutput agents.
+    return () => {}
   }
 
   onProcessExit(cb: (info: ProcessExitInfo) => void): () => void {
@@ -148,17 +95,22 @@ class ClaudeRunHandle implements AgentRunHandle {
     return () => this.exitListeners.delete(cb)
   }
 
-  respondToInteraction(_interactionId: string, optionId: string): void {
-    this.controller?.write(ClaudeInputTranslator.formatInteractionResponse(optionId))
+  respondToInteraction(): void {
+    console.warn('[claude] respondToInteraction() is unsupported — the structured transport has not been observed to pause mid-turn')
   }
 
   setModel(modelId: string): void {
-    this.pendingAutoSelect = { kind: 'model', modelId }
-    this.controller?.write(ClaudeInputTranslator.formatOpenModelMenu())
+    // No live process to redirect (each turn is a fresh invocation) —
+    // applies starting the next turn.
+    this.pendingModelId = modelId
   }
 
-  runCommand(commandId: string): void {
-    this.controller?.write(ClaudeInputTranslator.formatCommand(commandId))
+  runCommand(): void {
+    console.warn('[claude] runCommand() is unsupported under the structured transport')
+  }
+
+  getNativeSessionId(): string | null {
+    return this.capturedNativeSessionId
   }
 
   private emit(event: AgentEvent): void {
@@ -181,10 +133,4 @@ export const claudeAdapter: AgentAdapter = {
   getCapabilities() {
     return getCapabilities('claude-code')
   }
-}
-
-// Re-exported so session-service can pull the "has a prior conversation"
-// marker back out after a turn completes.
-export function getClaudeNativeSessionId(handle: AgentRunHandle): string | null {
-  return handle instanceof ClaudeRunHandle && handle.hasStarted ? HAS_PRIOR_SESSION_MARKER : null
 }
