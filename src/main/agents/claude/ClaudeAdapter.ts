@@ -54,6 +54,13 @@ class ClaudeRunHandle implements AgentRunHandle {
   private userCausedExit = false
   private currentTurnId = ''
   private pendingModelId: string | null = null
+  /** Read once from ctx at construction — session-service constructs a
+   *  fresh handle every turn (see sendPrompt), so this is always the
+   *  freshest Settings → Agents value, unlike pendingModelId's live-only
+   *  mechanism. No setReasoningEffort() on the handle: changing it is
+   *  always via Settings persistence + this ctx read on the next turn,
+   *  the same robust mechanism Codex's reasoning effort uses. */
+  private currentReasoningEffort: string | null
   private readonly eventListeners = new Set<(event: AgentEvent) => void>()
   private readonly exitListeners = new Set<(info: ProcessExitInfo) => void>()
   /** interactionId -> resolver for a pending canUseTool call (ordinary
@@ -63,7 +70,9 @@ class ClaudeRunHandle implements AgentRunHandle {
    *  both — the resolver closure knows which kind it is. */
   private readonly pendingInteractions = new Map<string, (optionId: string) => void>()
 
-  constructor(private readonly ctx: AgentRunContext) {}
+  constructor(private readonly ctx: AgentRunContext) {
+    this.currentReasoningEffort = ctx.reasoningEffort
+  }
 
   get isRunning(): boolean {
     return this.transport?.isRunning ?? false
@@ -81,6 +90,7 @@ class ClaudeRunHandle implements AgentRunHandle {
         permissionMode: this.ctx.permissionMode,
         nativeSessionId: this.ctx.nativeSessionId,
         modelId: this.pendingModelId,
+        effortLevel: this.currentReasoningEffort,
         canUseTool: this.buildCanUseTool()
       })
       this.pendingModelId = null
@@ -125,7 +135,18 @@ class ClaudeRunHandle implements AgentRunHandle {
     const { events, state, capturedSessionId } = ClaudeEventMapper.mapMessage(obj, this.mapperState, this.ctx.session.id, this.currentTurnId)
     this.mapperState = state
     if (capturedSessionId) this.capturedNativeSessionId = capturedSessionId
-    for (const event of events) this.emit(event)
+    for (const event of events) {
+      // model_info's `model` field is a real echo from system/init — the
+      // CLI has no equivalent echo for the active effort level, so
+      // reasoningEffort is reported here as exactly what this turn was
+      // told to use (this.currentReasoningEffort), the same honest
+      // "not a guess, just not an echo" treatment Codex's model_info uses.
+      if (event.type === 'model_info' && this.currentReasoningEffort) {
+        this.emit({ ...event, reasoningEffort: this.currentReasoningEffort })
+      } else {
+        this.emit(event)
+      }
+    }
   }
 
   private buildCanUseTool(): CanUseTool {

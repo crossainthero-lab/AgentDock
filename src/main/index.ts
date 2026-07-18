@@ -8,6 +8,8 @@ import { loadWindowState, saveWindowState } from './window-state'
 import { registerAllIpc } from './ipc'
 import { detectionService } from './services/detection-service'
 import { codexModelCatalogService } from './services/codex-model-catalog-service'
+import { claudeModelCatalogService } from './services/claude-model-catalog-service'
+import { workspaceService } from './services/workspace-service'
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -109,6 +111,19 @@ app.whenReady().then(async () => {
     const detection = await detectionService.detect('codex', customPath).catch(() => null)
     if (detection?.installed && detection.executablePath) {
       await codexModelCatalogService.refresh(detection.executablePath, settingsService.get().agents.codex.model).catch(() => {})
+    }
+  })()
+
+  // Same warm-cache treatment for Claude's reasoning-effort catalogue
+  // (Query.supportedModels()) — no specific workspace is open yet this
+  // early, so process.cwd() stands in (supportedModels() doesn't depend on
+  // which workspace is active; it's account/plan-scoped).
+  void (async () => {
+    const customPath = settingsService.get().agents['claude-code'].customPath
+    const detection = await detectionService.detect('claude-code', customPath).catch(() => null)
+    if (detection?.installed && detection.executablePath) {
+      const cwd = workspaceService.getCurrent()?.path ?? process.cwd()
+      await claudeModelCatalogService.refresh(detection.executablePath, cwd).catch(() => {})
     }
   })()
 })

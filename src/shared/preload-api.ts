@@ -2,6 +2,7 @@ import type {
   AgentCapabilities,
   AgentDetection,
   AgentId,
+  AgentModelOption,
   ApprovalDecision,
   ApprovalRequest,
   ChangedFile,
@@ -66,6 +67,14 @@ export interface AgentDockApi {
      *  updates the cache — used at app start, on the Settings "Refresh"
      *  action, and the Model menu's own refresh button. */
     refreshModelCatalog(): Promise<CodexModelCatalogResult>
+  }
+  claude: {
+    /** Fast, non-blocking — returns the cached (or plain static,
+     *  reasoning-effort-unenriched) model list without spawning anything. */
+    getModelCatalog(): Promise<AgentModelOption[]>
+    /** Does a real live fetch against Claude Agent SDK's
+     *  Query.supportedModels() and updates the cache. */
+    refreshModelCatalog(): Promise<AgentModelOption[]>
   }
   session: {
     create(input: CreateSessionInput): Promise<Session>

@@ -29,6 +29,11 @@ const api: AgentDockApi = {
     refreshModelCatalog: () => ipcRenderer.invoke(IpcChannels.codexModelCatalogRefresh)
   },
 
+  claude: {
+    getModelCatalog: () => ipcRenderer.invoke(IpcChannels.claudeModelCatalogGet),
+    refreshModelCatalog: () => ipcRenderer.invoke(IpcChannels.claudeModelCatalogRefresh)
+  },
+
   session: {
     create: (input) => ipcRenderer.invoke(IpcChannels.sessionCreate, input),
     list: (workspaceId) => ipcRenderer.invoke(IpcChannels.sessionList, workspaceId),

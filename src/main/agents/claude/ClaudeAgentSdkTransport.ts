@@ -12,7 +12,7 @@
 // ERR_REQUIRE_ESM. It's loaded via a cached dynamic `import()` instead;
 // only types are imported statically (erased at compile time, never
 // reach runtime as a require call).
-import type { CanUseTool, Options, PermissionMode, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { CanUseTool, EffortLevel, Options, PermissionMode, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
 type ClaudeAgentSdkModule = typeof import('@anthropic-ai/claude-agent-sdk')
 
@@ -65,6 +65,16 @@ export interface ClaudeAgentSdkTransportOptions {
   permissionMode: string
   nativeSessionId: string | null
   modelId: string | null
+  /** One of the selected model's own real supportedEffortLevels (from
+   *  Query.supportedModels() — see claude-model-catalog-service.ts), or
+   *  null/undefined to use the SDK's own default ('high', per its own
+   *  Options.effort doc). Deliberately typed as a plain string rather than
+   *  the SDK's `EffortLevel` union: passing a level a given model doesn't
+   *  support is confirmed safe (empirically verified live — Haiku, which
+   *  supports no effort levels at all, silently ignores it rather than
+   *  erroring), so this never needs to be pre-validated against the
+   *  model's own supported set before being forwarded. */
+  effortLevel?: string | null
   canUseTool: CanUseTool
   env?: NodeJS.ProcessEnv
 }
@@ -138,6 +148,9 @@ export class ClaudeAgentSdkTransport {
         permissionMode,
         allowDangerouslySkipPermissions: permissionMode === 'bypassPermissions',
         model: this.opts.modelId ?? undefined,
+        // Cast past the SDK's fixed EffortLevel union — see this field's
+        // doc comment in ClaudeAgentSdkTransportOptions above.
+        effort: (this.opts.effortLevel ?? undefined) as EffortLevel | undefined,
         resume: this.opts.nativeSessionId ?? undefined,
         includePartialMessages: true,
         canUseTool: this.opts.canUseTool,
@@ -174,6 +187,17 @@ export class ClaudeAgentSdkTransport {
 
   setModel(modelId: string | undefined): void {
     this.query?.setModel(modelId).catch((err) => console.warn('[claude-sdk] setModel() failed', err))
+  }
+
+  /** Live reasoning-effort switch for an already-running query.
+   *  Query.applyFlagSettings() merges into the flag settings layer mid-
+   *  session — confirmed via the SDK's own doc comment that `effortLevel`
+   *  applies for the rest of the session without restarting it. Pass
+   *  `null` to clear back to the SDK's own default. */
+  setEffort(effortLevel: string | null): void {
+    this.query
+      ?.applyFlagSettings({ effortLevel: effortLevel as EffortLevel | null })
+      .catch((err) => console.warn('[claude-sdk] applyFlagSettings(effortLevel) failed', err))
   }
 
   setPermissionMode(mode: string): void {

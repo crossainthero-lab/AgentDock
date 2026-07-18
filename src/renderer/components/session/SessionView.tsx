@@ -29,6 +29,11 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
   // fetch never blocks or clobbers the rest of capabilities.
   const [codexModels, setCodexModels] = useState<AgentModelOption[]>([])
   const [codexCatalogRefreshing, setCodexCatalogRefreshing] = useState(false)
+  // Same idea for Claude: the static claudeCapabilities.models list (id/
+  // label/description) never changes, but which reasoning-effort levels
+  // each model supports is discovered live from Query.supportedModels()
+  // (see claude-model-catalog-service.ts) and merged in the same way.
+  const [claudeModels, setClaudeModels] = useState<AgentModelOption[]>([])
 
   useEffect(() => {
     setChangesOpen(false)
@@ -99,6 +104,22 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
       .finally(() => setCodexCatalogRefreshing(false))
   }
 
+  // Same fast, non-blocking cached-load pattern as Codex's catalog above —
+  // never spawns a process on mount. A real live fetch also happens once
+  // at app startup (main/index.ts).
+  useEffect(() => {
+    if (conversation.session?.agentId !== 'claude-code') return
+    let cancelled = false
+    void getAgentDock()
+      .claude.getModelCatalog()
+      .then((models) => {
+        if (!cancelled) setClaudeModels(models)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [conversation.session?.agentId])
+
   if (!workspace || !conversation.session) return null
 
   const session: Session = conversation.session
@@ -125,12 +146,18 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
       .catch((err) => reportActionError('Open terminal', err))
   }
 
-  // Codex's live catalogue is fetched separately from the static
-  // capability declaration (see the effects above) — merged in here at
-  // render time rather than into `capabilities` state directly, so a
-  // slow/failed catalogue fetch can never clobber permissionModes/commands.
-  const effectiveCapabilities: AgentCapabilities | null =
-    session.agentId === 'codex' && capabilities ? { ...capabilities, models: codexModels } : capabilities
+  // Codex's and Claude's live-enriched model lists are fetched separately
+  // from the static capability declaration (see the effects above) —
+  // merged in here at render time rather than into `capabilities` state
+  // directly, so a slow/failed catalogue fetch can never clobber
+  // permissionModes/commands.
+  const effectiveCapabilities: AgentCapabilities | null = !capabilities
+    ? capabilities
+    : session.agentId === 'codex'
+      ? { ...capabilities, models: codexModels }
+      : session.agentId === 'claude-code'
+        ? { ...capabilities, models: claudeModels }
+        : capabilities
 
   return (
     <div className="ad-session-view">
@@ -170,10 +197,15 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
             conversation.setModel(modelId).catch((err) => reportActionError('Set model', err))
           }}
           onSetReasoningEffort={(effortId) => {
-            // Same persistence-based mechanism as onSetModel above — Codex
-            // is the only agent this applies to today (Menu renders
-            // nothing for agents with no supportedReasoningEfforts data).
-            void updateSettings({ agents: { codex: { reasoningEffort: effortId } } })
+            // Persisted per agent (Settings → Agents), same as permission
+            // mode above — read fresh into ctx.reasoningEffort on the next
+            // turn (session-service.sendPrompt), which is what makes it
+            // apply without losing the conversation and survive an
+            // AgentDock restart. Never routed through a live handle call:
+            // both Claude and Codex construct a fresh process/query per
+            // turn in this app's session-service, so there's no reliable
+            // "currently live" handle to redirect anyway.
+            void updateSettings({ agents: { [session.agentId]: { reasoningEffort: effortId } } })
           }}
           onRefreshModelCatalog={session.agentId === 'codex' ? refreshCodexModelCatalog : undefined}
           refreshingModelCatalog={codexCatalogRefreshing}

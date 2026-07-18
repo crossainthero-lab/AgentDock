@@ -10,6 +10,7 @@ import { registerHandoffIpc } from './handoff'
 import { registerWindowIpc } from './window'
 import { registerMediaIpc } from './media'
 import { registerCodexIpc } from './codex'
+import { registerClaudeIpc } from './claude'
 
 export function registerAllIpc(window: BrowserWindow): void {
   registerWorkspaceIpc(window)
@@ -23,4 +24,5 @@ export function registerAllIpc(window: BrowserWindow): void {
   registerWindowIpc(window)
   registerMediaIpc()
   registerCodexIpc()
+  registerClaudeIpc()
 }

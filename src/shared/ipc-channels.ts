@@ -17,6 +17,9 @@ export const IpcChannels = {
   codexModelCatalogGet: 'codex:modelCatalog:get',
   codexModelCatalogRefresh: 'codex:modelCatalog:refresh',
 
+  claudeModelCatalogGet: 'claude:modelCatalog:get',
+  claudeModelCatalogRefresh: 'claude:modelCatalog:refresh',
+
   sessionCreate: 'session:create',
   sessionList: 'session:list',
   sessionGet: 'session:get',

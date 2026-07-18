@@ -16,9 +16,9 @@ interface SessionHeaderProps {
   /** The real model in use, reported by the transport itself (Claude's
    *  system/init) — null until known. Never guessed/hardcoded. */
   currentModel: string | null
-  /** The real reasoning effort in use for the current model (Codex only —
-   *  each model has its own supportedReasoningEfforts list, so this is a
-   *  separate control from currentModel, not a mode of it). */
+  /** The real reasoning effort in use for the current model (Claude and
+   *  Codex both) — each model has its own supportedReasoningEfforts list,
+   *  so this is a separate control from currentModel, not a mode of it. */
   currentReasoningEffort: string | null
   /** The real, effective permission mode reported the same way — may
    *  differ from `currentPermissionMode` (what AgentDock requested) if the
@@ -103,23 +103,37 @@ function capitalize(id: string): string {
   return id.charAt(0).toUpperCase() + id.slice(1)
 }
 
-/** Resolves the reasoning-effort control's trigger text — a real selected
- *  effort, the selected model's own default effort (labeled as such,
- *  never presented as if the user picked it), or the generic placeholder
- *  when no model is selected yet at all. */
+/** Resolves the Reasoning menu's trigger text — a real selected level, the
+ *  selected model's own default level (labeled as such, never presented as
+ *  if the user picked it), or the generic placeholder. Deliberately
+ *  ignores a persisted level that isn't valid for the *current* model
+ *  (e.g. switching from a reasoning-capable model to one with no
+ *  supportedReasoningEfforts at all, like Claude's Haiku) rather than
+ *  displaying a stale/invalid selection — this is what "automatically
+ *  choose its valid default and update the displayed value" means for a
+ *  model that doesn't support reasoning effort at all: there is no valid
+ *  level, so nothing is shown as selected (the Menu itself also renders
+ *  nothing in that case, since its items list is empty). */
 function reasoningEffortDisplay(
   currentReasoningEffort: string | null,
   selectedModel: AgentModelOption | undefined
 ): { label: string; selectedId: string | null } {
-  if (!selectedModel) return { label: 'Effort', selectedId: null }
+  const options = selectedModel?.supportedReasoningEfforts
+  if (!selectedModel || !options || options.length === 0) return { label: 'Reasoning', selectedId: null }
   if (currentReasoningEffort) {
-    const match = selectedModel.supportedReasoningEfforts?.find((e) => e.id === currentReasoningEffort)
-    return { label: match?.label ?? capitalize(currentReasoningEffort), selectedId: currentReasoningEffort }
+    const match = options.find((e) => e.id === currentReasoningEffort)
+    if (match) return { label: match.label, selectedId: match.id }
+    // Persisted level doesn't exist for this model — fall through to the
+    // model's own default instead of showing a value it doesn't support.
   }
   if (selectedModel.defaultReasoningEffort) {
-    return { label: `${capitalize(selectedModel.defaultReasoningEffort)} (default)`, selectedId: selectedModel.defaultReasoningEffort }
+    const defaultMatch = options.find((e) => e.id === selectedModel.defaultReasoningEffort)
+    return {
+      label: `${defaultMatch?.label ?? capitalize(selectedModel.defaultReasoningEffort)} (default)`,
+      selectedId: selectedModel.defaultReasoningEffort
+    }
   }
-  return { label: 'Effort', selectedId: null }
+  return { label: 'Reasoning', selectedId: null }
 }
 
 export function SessionHeader({
@@ -169,7 +183,13 @@ export function SessionHeader({
     : visibleCodexModels
 
   const selectedCodexModel = isCodex ? allCodexModels.find((m) => m.id === modelDisplay.selectedId) : undefined
-  const effortDisplay = reasoningEffortDisplay(currentReasoningEffort, selectedCodexModel)
+  // Claude's model list is capabilities.models directly (no legacy/hidden
+  // split — that's a Codex-only concept, since Codex's live catalogue
+  // genuinely returns account-hidden models and Claude's static list
+  // doesn't have an equivalent).
+  const selectedClaudeModel = isClaude ? (capabilities?.models ?? []).find((m) => m.id === modelDisplay.selectedId) : undefined
+  const selectedModelForReasoning = isCodex ? selectedCodexModel : selectedClaudeModel
+  const reasoningDisplay = reasoningEffortDisplay(currentReasoningEffort, selectedModelForReasoning)
 
   return (
     <div className="ad-session-header">
@@ -194,12 +214,12 @@ export function SessionHeader({
           onSelect={onSetModel}
           disabled={!capabilities?.supportsLiveModelSwitch}
         />
-        {isCodex && (
+        {(isClaude || isCodex) && (
           <Menu
-            label="Effort"
-            items={selectedCodexModel?.supportedReasoningEfforts ?? []}
-            selectedId={effortDisplay.selectedId}
-            selectedLabel={`Effort: ${effortDisplay.label}`}
+            label="Reasoning"
+            items={selectedModelForReasoning?.supportedReasoningEfforts ?? []}
+            selectedId={reasoningDisplay.selectedId}
+            selectedLabel={`Reasoning: ${reasoningDisplay.label}`}
             onSelect={onSetReasoningEffort}
           />
         )}

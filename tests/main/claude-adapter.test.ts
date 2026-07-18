@@ -14,6 +14,8 @@ class MockQuery {
   readonly interrupt = vi.fn(async () => ({ still_queued: [] }))
   readonly setModel = vi.fn(async () => {})
   readonly setPermissionMode = vi.fn(async () => {})
+  readonly applyFlagSettings = vi.fn(async () => {})
+  readonly supportedModels = vi.fn(async () => [])
 
   push(msg: unknown): void {
     const waiter = this.waiting.shift()
@@ -165,6 +167,41 @@ describe('claudeAdapter', () => {
     expect(events).toContainEqual({ type: 'model_info', sessionId: 's1', turnId: 't1', model: 'claude-sonnet-5' })
     expect(events).toContainEqual({ type: 'permission_mode_info', sessionId: 's1', turnId: 't1', permissionMode: 'acceptEdits' })
     expect(handle.getNativeSessionId()).toBe('sid')
+  })
+
+  it('passes ctx.reasoningEffort through to Options.effort at query construction', async () => {
+    const handle = claudeAdapter.start({ ...ctx, reasoningEffort: 'xhigh' })
+    handle.send('go', 't1')
+    await flushMicrotasks()
+
+    expect(queryCalls[0].options.effort).toBe('xhigh')
+  })
+
+  it('omits effort entirely when no reasoning level is configured (never invents one)', async () => {
+    const handle = claudeAdapter.start({ ...ctx, reasoningEffort: null })
+    handle.send('go', 't1')
+    await flushMicrotasks()
+
+    expect(queryCalls[0].options.effort).toBeUndefined()
+  })
+
+  it('augments model_info with the configured reasoningEffort (no echo exists for it, so this is what the turn was told to use, not a guess)', async () => {
+    const handle = claudeAdapter.start({ ...ctx, reasoningEffort: 'high' })
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('hello', 't1')
+    await flushMicrotasks()
+
+    queryCalls[0].mock.push({ type: 'system', subtype: 'init', session_id: 'sid', model: 'claude-sonnet-5', permissionMode: 'default' })
+    await flushMicrotasks()
+
+    expect(events).toContainEqual({
+      type: 'model_info',
+      sessionId: 's1',
+      turnId: 't1',
+      model: 'claude-sonnet-5',
+      reasoningEffort: 'high'
+    })
   })
 
   it('maps a full turn (init, deltas, result) into turn_started, assistant_delta(s), turn_completed', async () => {
