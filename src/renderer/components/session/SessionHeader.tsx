@@ -1,8 +1,8 @@
 import type React from 'react'
 import { useState } from 'react'
-import { FileDiff, MoreHorizontal, Square, Terminal, UserPlus } from 'lucide-react'
+import { FileDiff, ListTree, MoreHorizontal, Square, Terminal, TerminalSquare, UserPlus } from 'lucide-react'
 import { AGENT_DISPLAY_NAMES } from '@shared/types'
-import type { AgentCapabilities, Session, SessionStatus } from '@shared/types'
+import type { AgentCapabilities, AgentModelOption, Session, SessionStatus } from '@shared/types'
 import { StatusDot } from '../ui/StatusDot'
 import { IconButton } from '../ui/IconButton'
 import { Menu } from '../ui/Menu'
@@ -13,6 +13,13 @@ interface SessionHeaderProps {
   changedFileCount: number
   capabilities: AgentCapabilities | null
   currentPermissionMode: string
+  /** The real model in use, reported by the transport itself (Claude's
+   *  system/init) — null until known. Never guessed/hardcoded. */
+  currentModel: string | null
+  /** The real, effective permission mode reported the same way — may
+   *  differ from `currentPermissionMode` (what AgentDock requested) if the
+   *  CLI applied a policy override. Preferred for display when present. */
+  effectivePermissionMode: string | null
   /** False for structured-transport agents (Claude, Codex) — they have no
    *  PTY/raw screen for the Terminal drawer to show. */
   showTerminal: boolean
@@ -24,19 +31,51 @@ interface SessionHeaderProps {
   onSetModel: (modelId: string) => void
   onSetPermissionMode: (modeId: string) => void
   onRunCommand: (commandId: string) => void
+  /** Only offered for Claude sessions — see NewSessionView/SessionView. */
+  onOpenExternalTerminal?: () => void
+  /** Opens the trace-only diagnostics view (Testing Mode) — offered for
+   *  structured-transport agents that have no raw terminal drawer to show. */
+  onOpenDiagnostics?: () => void
 }
 
 function statusLabel(status: SessionStatus): string {
   switch (status) {
     case 'running':
-      return 'Running'
+      return 'Thinking…'
+    case 'waiting_for_permission':
+      return 'Waiting for permission'
+    case 'waiting_for_user':
+      return 'Waiting for your response'
     case 'error':
       return 'Error'
     case 'stopped':
-      return 'Stopped'
+      return 'Cancelled'
+    case 'cancelled':
+      return 'Cancelled'
+    case 'exited':
+      return 'Process exited'
     default:
-      return 'Idle'
+      return 'Ready'
   }
+}
+
+/** Resolves the Model menu's trigger text for a Claude session: the real
+ *  reported model matched against the known alias list (e.g.
+ *  "claude-sonnet-5" -> "Sonnet"), the raw value verbatim if it doesn't
+ *  match any known alias, "Detecting model…" while a turn is active and
+ *  nothing has been reported yet, or "Claude — Unknown model" once a turn
+ *  has finished without ever reporting one. Never invents a model name. */
+function claudeModelDisplay(
+  currentModel: string | null,
+  models: AgentModelOption[],
+  sessionStatus: SessionStatus
+): { label: string; selectedId: string | null } {
+  if (currentModel) {
+    const match = models.find((m) => currentModel.includes(m.id))
+    return { label: match?.label ?? currentModel, selectedId: match?.id ?? null }
+  }
+  const turnLikelyActive = sessionStatus === 'running' || sessionStatus === 'waiting_for_permission' || sessionStatus === 'waiting_for_user'
+  return turnLikelyActive ? { label: 'Detecting model…', selectedId: null } : { label: 'Claude — Unknown model', selectedId: null }
 }
 
 export function SessionHeader({
@@ -44,6 +83,8 @@ export function SessionHeader({
   changedFileCount,
   capabilities,
   currentPermissionMode,
+  currentModel,
+  effectivePermissionMode,
   showTerminal,
   onOpenChanges,
   onOpenTerminal,
@@ -52,9 +93,18 @@ export function SessionHeader({
   onInterrupt,
   onSetModel,
   onSetPermissionMode,
-  onRunCommand
+  onRunCommand,
+  onOpenExternalTerminal,
+  onOpenDiagnostics
 }: SessionHeaderProps): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
+  const isClaude = session.agentId === 'claude-code'
+  const modelDisplay = isClaude
+    ? claudeModelDisplay(currentModel, capabilities?.models ?? [], session.status)
+    : { label: 'Model', selectedId: null }
+  const displayedPermissionMode = effectivePermissionMode ?? currentPermissionMode
+  const permissionModeOption = capabilities?.permissionModes.find((m) => m.id === displayedPermissionMode)
+  const isBusy = session.status === 'running' || session.status === 'waiting_for_permission' || session.status === 'waiting_for_user'
 
   return (
     <div className="ad-session-header">
@@ -74,13 +124,16 @@ export function SessionHeader({
         <Menu
           label="Model"
           items={capabilities?.models ?? []}
+          selectedId={modelDisplay.selectedId}
+          selectedLabel={isClaude ? modelDisplay.label : undefined}
           onSelect={onSetModel}
           disabled={!capabilities?.supportsLiveModelSwitch}
         />
         <Menu
           label="Permissions"
           items={capabilities?.permissionModes ?? []}
-          selectedId={currentPermissionMode}
+          selectedId={displayedPermissionMode}
+          selectedLabel={permissionModeOption ? `Permissions: ${permissionModeOption.label}` : undefined}
           onSelect={onSetPermissionMode}
         />
         <Menu label="Commands" items={capabilities?.commands ?? []} onSelect={onRunCommand} />
@@ -98,7 +151,7 @@ export function SessionHeader({
           </button>
         )}
 
-        {session.status === 'running' && (
+        {isBusy && (
           <IconButton label="Interrupt" size="sm" onClick={onInterrupt}>
             <Square size={13} />
           </IconButton>
@@ -121,7 +174,7 @@ export function SessionHeader({
                   <UserPlus size={13} />
                   Continue with another agent
                 </button>
-                {session.status === 'running' && (
+                {isBusy && (
                   <button
                     onClick={() => {
                       setMenuOpen(false)
@@ -130,6 +183,28 @@ export function SessionHeader({
                   >
                     <Square size={13} />
                     Stop session
+                  </button>
+                )}
+                {!showTerminal && onOpenExternalTerminal && (
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false)
+                      onOpenExternalTerminal()
+                    }}
+                  >
+                    <TerminalSquare size={13} />
+                    Open new {AGENT_DISPLAY_NAMES[session.agentId]} terminal here
+                  </button>
+                )}
+                {!showTerminal && onOpenDiagnostics && (
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false)
+                      onOpenDiagnostics()
+                    }}
+                  >
+                    <ListTree size={13} />
+                    Session diagnostics
                   </button>
                 )}
               </div>

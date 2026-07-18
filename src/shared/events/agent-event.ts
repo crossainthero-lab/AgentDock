@@ -29,6 +29,22 @@ export type AgentInteraction =
   // have no "screen stalled, unclear what's happening" concept.
   | { kind: 'terminal_attention'; interactionId: string; reason: string }
 
+/** Optional, tool-specific structured payload carried alongside an activity
+ *  event — additive, no adapter is required to populate it (a bare
+ *  label/tool string is still a complete, valid activity on its own). Lets
+ *  the renderer show a genuinely useful card (real command + real output,
+ *  real changed file paths, real search query, ...) instead of a generic
+ *  "ran a tool" line, without inventing a whole new per-tool event type for
+ *  each one. First populated by Codex (see CodexEventMapper.ts), but the
+ *  shape is agent-neutral — any adapter may use it. */
+export type ActivityDetail =
+  | { kind: 'command'; command: string; output?: string; exitCode?: number | null }
+  | { kind: 'file_change'; changes: Array<{ path: string; kind: 'add' | 'delete' | 'update' }> }
+  | { kind: 'mcp_tool_call'; server: string; tool: string; args?: unknown; result?: unknown; error?: string }
+  | { kind: 'web_search'; query: string }
+  | { kind: 'todo_list'; items: Array<{ text: string; completed: boolean }> }
+  | { kind: 'reasoning'; text: string }
+
 interface AgentEventBase {
   sessionId: string
   turnId: string
@@ -38,16 +54,36 @@ export type AgentEvent =
   | (AgentEventBase & { type: 'turn_started' })
   | (AgentEventBase & { type: 'assistant_delta'; messageId: string; textDelta: string })
   | (AgentEventBase & { type: 'assistant_completed'; messageId: string; text: string })
-  | (AgentEventBase & { type: 'activity_started'; activityId: string; label: string; tool?: string })
-  | (AgentEventBase & { type: 'activity_updated'; activityId: string; label?: string; elapsedMs?: number })
+  | (AgentEventBase & { type: 'activity_started'; activityId: string; label: string; tool?: string; detail?: ActivityDetail })
+  | (AgentEventBase & { type: 'activity_updated'; activityId: string; label?: string; elapsedMs?: number; detail?: ActivityDetail })
   // Self-describing like assistant_completed's `text` — carries its own
   // label/tool rather than requiring the consumer to correlate back to the
   // matching activity_started, since session-service only persists on
   // completion and has no reason to track per-turn activity state itself.
-  | (AgentEventBase & { type: 'activity_completed'; activityId: string; label: string; tool?: string; status: 'done' | 'error'; summary?: string })
+  | (AgentEventBase & {
+      type: 'activity_completed'
+      activityId: string
+      label: string
+      tool?: string
+      status: 'done' | 'error'
+      summary?: string
+      detail?: ActivityDetail
+    })
   | (AgentEventBase & { type: 'interaction_required'; interaction: AgentInteraction })
   | (AgentEventBase & { type: 'turn_completed'; result?: string })
   | (AgentEventBase & { type: 'turn_failed'; reason: string })
+  // Turn ended because the user asked it to (Stop/Interrupt), distinct from
+  // turn_failed (a genuine error) — see AgentEventReducer's handling.
+  | (AgentEventBase & { type: 'turn_cancelled' })
+  // The underlying process/query ended unexpectedly with no result and no
+  // user-initiated stop/interrupt — a crash, not a cancellation.
+  | (AgentEventBase & { type: 'turn_exited'; reason: string })
+  // The real model in use for this session, as reported by the Claude Agent
+  // SDK's system/init message — never guessed or hardcoded.
+  | (AgentEventBase & { type: 'model_info'; model: string })
+  // The real, effective permission mode reported by the same system/init
+  // message (may differ from what AgentDock requested, e.g. a policy override).
+  | (AgentEventBase & { type: 'permission_mode_info'; permissionMode: string })
 
 export interface SessionEventEnvelope {
   sessionId: string

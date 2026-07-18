@@ -342,6 +342,58 @@ describe('pending interactions', () => {
   })
 })
 
+describe('turn_cancelled / turn_exited / model_info / permission_mode_info', () => {
+  it('turn_cancelled ends the turn without adding an error item (a cancellation is not a crash)', () => {
+    let state = createReducerState()
+    state = send(state, 'go')
+    state = applyEnvelope(state, envelope({ type: 'turn_cancelled' }, 1)).state
+    expect(state.turn?.status).toBe('failed')
+    expect(state.isBusy).toBe(false)
+    expect(state.items.some((i) => i.kind === 'system' && i.role === 'error')).toBe(false)
+  })
+
+  it('turn_exited adds a visible error item, same as turn_failed', () => {
+    let state = createReducerState()
+    state = send(state, 'go')
+    state = applyEnvelope(state, envelope({ type: 'turn_exited', reason: 'connection lost' }, 1)).state
+    expect(state.turn?.status).toBe('failed')
+    expect(state.isBusy).toBe(false)
+    expect(state.items.some((i) => i.kind === 'system' && i.role === 'error' && i.text === 'connection lost')).toBe(true)
+  })
+
+  it('model_info updates currentModel, never fabricated otherwise', () => {
+    let state = createReducerState()
+    expect(state.currentModel).toBeNull()
+    state = send(state, 'go')
+    state = applyEnvelope(state, envelope({ type: 'model_info', model: 'claude-sonnet-5' }, 1)).state
+    expect(state.currentModel).toBe('claude-sonnet-5')
+  })
+
+  it('permission_mode_info updates currentPermissionMode', () => {
+    let state = createReducerState()
+    state = send(state, 'go')
+    state = applyEnvelope(state, envelope({ type: 'permission_mode_info', permissionMode: 'acceptEdits' }, 1)).state
+    expect(state.currentPermissionMode).toBe('acceptEdits')
+  })
+})
+
+describe('stale-turn timeout exemption for a pending interaction', () => {
+  it('never force-fails a turn that is genuinely awaiting a permission/question, however long it has been open', () => {
+    let state = createReducerState()
+    state = send(state, 'go', 't1', 0)
+    state = applyEnvelope(
+      state,
+      envelope({ type: 'interaction_required', interaction: { kind: 'permission', interactionId: 'i1', prompt: 'Allow?', options: [] } }, 1, 't1'),
+      0
+    ).state
+    expect(state.turn?.status).toBe('awaiting_interaction')
+
+    const afterLongDelay = forceCompleteStaleTurn(state, 60_000, 10_000_000)
+    expect(afterLongDelay.turn?.status).toBe('awaiting_interaction')
+    expect(afterLongDelay.isBusy).toBe(true)
+  })
+})
+
 describe('activity aggregate summary (AgentActivityTracker, reused as-is)', () => {
   it('turns an in-order stream of activity events into the "Worked for Ns · Read N files · Edited N files" summary', () => {
     let state = createReducerState()

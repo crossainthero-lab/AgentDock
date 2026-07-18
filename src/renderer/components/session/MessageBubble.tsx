@@ -1,8 +1,9 @@
 import type React from 'react'
-import { Fragment } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import type { MessageRole } from '@shared/types'
 import type { DeliveryState } from '@shared/events/AgentEventReducer'
+import { MarkdownMessage } from '../markdown/MarkdownMessage'
+import { CopyButton } from '../markdown/CopyButton'
 import './MessageBubble.css'
 
 interface MessageBubbleProps {
@@ -12,21 +13,37 @@ interface MessageBubbleProps {
    *  actually reached the live CLI yet (see AgentEventReducer.beginSend). */
   deliveryState?: DeliveryState
   onRetry?: () => void
+  /** Needed to resolve local (non-http, no-scheme) image/link paths in
+   *  assistant Markdown — null when there's no open workspace. */
+  workspaceId?: string | null
 }
 
-export function MessageBubble({ role, text, deliveryState, onRetry }: MessageBubbleProps): React.JSX.Element {
+export function MessageBubble({ role, text, deliveryState, onRetry, workspaceId = null }: MessageBubbleProps): React.JSX.Element {
   if (role === 'error') {
     return (
       <div className="ad-message ad-message--error">
         <AlertTriangle size={14} />
-        <div className="ad-message__text">{renderRichText(text)}</div>
+        <div className="ad-message__text">{text}</div>
+      </div>
+    )
+  }
+
+  if (role === 'assistant') {
+    return (
+      <div className="ad-message ad-message--assistant ad-message--group">
+        <div className="ad-message__text">
+          <MarkdownMessage text={text} workspaceId={workspaceId} />
+        </div>
+        <div className="ad-message__toolbar">
+          <CopyButton text={text} label="Copy" />
+        </div>
       </div>
     )
   }
 
   return (
     <div className={`ad-message ad-message--${role === 'user' ? 'user' : 'assistant'}`}>
-      <div className="ad-message__text">{renderRichText(text)}</div>
+      <div className="ad-message__text ad-message__text--plain">{text}</div>
       {deliveryState === 'sending' && <div className="ad-message__delivery">Sending…</div>}
       {deliveryState === 'failed' && (
         <div className="ad-message__delivery ad-message__delivery--failed">
@@ -38,24 +55,4 @@ export function MessageBubble({ role, text, deliveryState, onRetry }: MessageBub
       )}
     </div>
   )
-}
-
-/** Minimal rendering: preserves line breaks and renders ```fenced``` blocks as code. */
-function renderRichText(text: string): React.ReactNode {
-  const parts = text.split(/```/g)
-  if (parts.length === 1) {
-    return text
-  }
-  return parts.map((part, i) => {
-    if (i % 2 === 1) {
-      const firstNewline = part.indexOf('\n')
-      const code = firstNewline >= 0 ? part.slice(firstNewline + 1) : part
-      return (
-        <pre className="ad-message__code" key={i}>
-          <code>{code.replace(/\n$/, '')}</code>
-        </pre>
-      )
-    }
-    return <Fragment key={i}>{part}</Fragment>
-  })
 }

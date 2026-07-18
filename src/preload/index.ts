@@ -19,7 +19,9 @@ const api: AgentDockApi = {
     list: () => ipcRenderer.invoke(IpcChannels.agentsList),
     detect: (agentId) => ipcRenderer.invoke(IpcChannels.agentsDetect, agentId),
     setCustomPath: (agentId, customPath) => ipcRenderer.invoke(IpcChannels.agentsSetCustomPath, agentId, customPath),
-    getCapabilities: (agentId) => ipcRenderer.invoke(IpcChannels.agentsGetCapabilities, agentId)
+    getCapabilities: (agentId) => ipcRenderer.invoke(IpcChannels.agentsGetCapabilities, agentId),
+    browseExecutable: (agentId) => ipcRenderer.invoke(IpcChannels.agentsBrowseExecutable, agentId),
+    testExecutable: (agentId, path) => ipcRenderer.invoke(IpcChannels.agentsTestExecutable, agentId, path)
   },
 
   session: {
@@ -47,7 +49,8 @@ const api: AgentDockApi = {
     respondToInteraction: (sessionId, interactionId, optionId) =>
       ipcRenderer.invoke(IpcChannels.sessionRespondInteraction, sessionId, interactionId, optionId),
     setModel: (sessionId, modelId) => ipcRenderer.invoke(IpcChannels.sessionSetModel, sessionId, modelId),
-    runCommand: (sessionId, commandId) => ipcRenderer.invoke(IpcChannels.sessionRunCommand, sessionId, commandId)
+    runCommand: (sessionId, commandId) => ipcRenderer.invoke(IpcChannels.sessionRunCommand, sessionId, commandId),
+    openExternalTerminal: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionOpenExternalTerminal, sessionId)
   },
 
   git: {
@@ -55,6 +58,13 @@ const api: AgentDockApi = {
     diff: (workspaceId, path) => ipcRenderer.invoke(IpcChannels.gitDiff, workspaceId, path),
     branch: (workspaceId) => ipcRenderer.invoke(IpcChannels.gitBranch, workspaceId),
     revertFile: (workspaceId, path) => ipcRenderer.invoke(IpcChannels.gitRevertFile, workspaceId, path)
+  },
+
+  media: {
+    resolveImage: (workspaceId, path) => ipcRenderer.invoke(IpcChannels.mediaResolveImage, workspaceId, path),
+    revealInFolder: (workspaceId, path) => ipcRenderer.invoke(IpcChannels.mediaRevealInFolder, workspaceId, path),
+    openLocalPath: (workspaceId, path) => ipcRenderer.invoke(IpcChannels.mediaOpenLocalPath, workspaceId, path),
+    openExternalLink: (url) => ipcRenderer.invoke(IpcChannels.mediaOpenExternalLink, url)
   },
 
   approvals: {

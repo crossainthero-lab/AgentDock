@@ -161,6 +161,109 @@ describe('sessionService — delivery and event sequencing', () => {
   })
 })
 
+describe('sessionService — new session-state transitions (waiting_for_permission/waiting_for_user/cancelled/exited)', () => {
+  beforeEach(() => {
+    fakeHandle = makeFakeHandle()
+    messageRepoAdd.mockClear()
+  })
+
+  it('interaction_required with kind:permission sets status to waiting_for_permission', async () => {
+    const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
+    await sessionService.sendPrompt('s-perm', 'run a command', 't1')
+    vi.mocked(sessionRepo.setStatus).mockClear()
+
+    fakeHandle.emit({
+      type: 'interaction_required',
+      sessionId: 's-perm',
+      turnId: 't1',
+      interaction: { kind: 'permission', interactionId: 'i1', prompt: 'Allow Bash?', options: [{ id: 'allow', label: 'Allow' }] }
+    })
+
+    expect(sessionRepo.setStatus).toHaveBeenCalledWith('s-perm', 'waiting_for_permission')
+  })
+
+  it('interaction_required with kind:choice (e.g. AskUserQuestion) sets status to waiting_for_user, not waiting_for_permission', async () => {
+    const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
+    await sessionService.sendPrompt('s-choice', 'ask me something', 't1')
+    vi.mocked(sessionRepo.setStatus).mockClear()
+
+    fakeHandle.emit({
+      type: 'interaction_required',
+      sessionId: 's-choice',
+      turnId: 't1',
+      interaction: { kind: 'choice', interactionId: 'i1', prompt: 'Pick a color', options: [{ id: 'red', label: 'Red' }] }
+    })
+
+    expect(sessionRepo.setStatus).toHaveBeenCalledWith('s-choice', 'waiting_for_user')
+  })
+
+  it('turn_cancelled sets status to cancelled and clears the running handle', async () => {
+    const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
+    await sessionService.sendPrompt('s-cancel', 'go', 't1')
+    vi.mocked(sessionRepo.setStatus).mockClear()
+
+    fakeHandle.emit({ type: 'turn_cancelled', sessionId: 's-cancel', turnId: 't1' })
+    expect(sessionRepo.setStatus).toHaveBeenCalledWith('s-cancel', 'cancelled')
+    expect(sessionService.isRunning('s-cancel')).toBe(false)
+  })
+
+  it('turn_exited sets status to exited and persists an error message, distinct from turn_failed', async () => {
+    const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
+    await sessionService.sendPrompt('s-exit', 'go', 't1')
+    vi.mocked(sessionRepo.setStatus).mockClear()
+
+    fakeHandle.emit({ type: 'turn_exited', sessionId: 's-exit', turnId: 't1', reason: 'connection lost' })
+    expect(sessionRepo.setStatus).toHaveBeenCalledWith('s-exit', 'exited')
+    expect(messageRepoAdd).toHaveBeenCalledWith('s-exit', 'error', { kind: 'text', text: 'connection lost' })
+  })
+})
+
+describe('sessionService.respondToInteraction — status only flips back to running after successful delivery', () => {
+  beforeEach(() => {
+    fakeHandle = makeFakeHandle()
+    messageRepoAdd.mockClear()
+  })
+
+  it('sets status to running only after handle.respondToInteraction succeeds', async () => {
+    const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
+    await sessionService.sendPrompt('s-resp', 'run a command', 't1')
+    fakeHandle.emit({
+      type: 'interaction_required',
+      sessionId: 's-resp',
+      turnId: 't1',
+      interaction: { kind: 'permission', interactionId: 'i1', prompt: 'Allow?', options: [{ id: 'allow', label: 'Allow' }] }
+    })
+    vi.mocked(sessionRepo.setStatus).mockClear()
+
+    sessionService.respondToInteraction('s-resp', 'i1', 'allow')
+    expect(fakeHandle.respondToInteraction).toHaveBeenCalledWith('i1', 'allow')
+    expect(sessionRepo.setStatus).toHaveBeenCalledWith('s-resp', 'running')
+  })
+
+  it('does NOT flip status to running (and leaves the prompt answerable) if delivery throws', async () => {
+    const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
+    await sessionService.sendPrompt('s-resp-fail', 'run a command', 't1')
+    fakeHandle.emit({
+      type: 'interaction_required',
+      sessionId: 's-resp-fail',
+      turnId: 't1',
+      interaction: { kind: 'permission', interactionId: 'i1', prompt: 'Allow?', options: [{ id: 'allow', label: 'Allow' }] }
+    })
+    fakeHandle.respondToInteraction.mockImplementationOnce(() => {
+      throw new Error('delivery failed')
+    })
+    vi.mocked(sessionRepo.setStatus).mockClear()
+
+    expect(() => sessionService.respondToInteraction('s-resp-fail', 'i1', 'allow')).not.toThrow()
+    expect(sessionRepo.setStatus).not.toHaveBeenCalledWith('s-resp-fail', 'running')
+
+    // The interaction must still be answerable — a retried, successful
+    // delivery for the SAME interactionId should still work.
+    sessionService.respondToInteraction('s-resp-fail', 'i1', 'allow')
+    expect(sessionRepo.setStatus).toHaveBeenCalledWith('s-resp-fail', 'running')
+  })
+})
+
 describe('sessionService.respondToInteraction — duplicate-submission prevention', () => {
   beforeEach(() => {
     fakeHandle = makeFakeHandle()

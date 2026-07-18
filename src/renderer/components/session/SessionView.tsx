@@ -74,9 +74,19 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
   // Terminal drawer only has something to show for Antigravity.
   const showTerminal = detection?.structuredOutput === false
   const openTerminal = (): void => {
-    if (!showTerminal) return
-    setChangesOpen(false)
-    setTerminalOpen(true)
+    if (showTerminal) {
+      setChangesOpen(false)
+      setTerminalOpen(true)
+      return
+    }
+    // No in-app drawer to show for this agent — open a real, independent
+    // terminal instead (a genuinely new process, not a reattachment).
+    conversation
+      .openExternalTerminal()
+      .then((result) => {
+        if (!result.launched) reportActionError('Open terminal', new Error(result.error ?? 'Unknown error'))
+      })
+      .catch((err) => reportActionError('Open terminal', err))
   }
 
   return (
@@ -87,6 +97,8 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           changedFileCount={changedCount}
           capabilities={capabilities}
           currentPermissionMode={settings?.agents[session.agentId]?.permissionMode ?? 'default'}
+          currentModel={conversation.currentModel}
+          effectivePermissionMode={conversation.effectivePermissionMode}
           showTerminal={showTerminal}
           onOpenChanges={() => {
             setTerminalOpen(false)
@@ -109,6 +121,26 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           onRunCommand={(commandId) => {
             conversation.runCommand(commandId).catch((err) => reportActionError('Run command', err))
           }}
+          onOpenExternalTerminal={
+            // Any structured-transport agent (Claude, Codex) has no in-app
+            // terminal drawer to fall back to — Antigravity already has a
+            // real, working one (showTerminal), so this button is only
+            // offered where it's the sole way to get a terminal at all.
+            !showTerminal
+              ? () => {
+                  conversation
+                    .openExternalTerminal()
+                    .then((result) => {
+                      if (!result.launched) reportActionError('Open terminal', new Error(result.error ?? 'Unknown error'))
+                    })
+                    .catch((err) => reportActionError('Open terminal', err))
+                }
+              : undefined
+          }
+          onOpenDiagnostics={() => {
+            setChangesOpen(false)
+            setTerminalOpen(true)
+          }}
         />
 
         {actionError && (
@@ -130,6 +162,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
             conversation.retryMessage(userMessageId).catch((err) => reportActionError('Retry', err))
           }}
           onOpenTerminal={openTerminal}
+          workspaceId={workspace.id}
         />
 
         <PromptComposer
@@ -145,12 +178,12 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           }}
         />
 
-        {showTerminal && terminalOpen && (
+        {terminalOpen && (
           <TerminalDrawer
             open={terminalOpen}
             onClose={() => setTerminalOpen(false)}
             sessionId={sessionId}
-            inputSupported
+            inputSupported={showTerminal}
             isRunning={conversation.isBusy}
             traces={conversation.traces}
           />

@@ -47,6 +47,20 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Defense-in-depth alongside the renderer's own link interception (see
+  // MarkdownLink.tsx) — the window itself must never navigate to anything
+  // other than its own app content. An external URL slipping past the
+  // renderer's click handler (e.g. a real anchor's default browser
+  // behavior) gets redirected to the OS browser instead of loading inside
+  // this window.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const isDevServer = !!process.env['ELECTRON_RENDERER_URL'] && url.startsWith(process.env['ELECTRON_RENDERER_URL'])
+    const isAppFile = url.startsWith('file://')
+    if (isDevServer || isAppFile) return
+    event.preventDefault()
+    void shell.openExternal(url)
+  })
+
   const persistState = (): void => {
     if (!mainWindow) return
     const bounds = mainWindow.getBounds()

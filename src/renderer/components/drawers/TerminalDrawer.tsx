@@ -53,10 +53,13 @@ export function TerminalDrawer({ open, onClose, sessionId, inputSupported, isRun
   const containerRef = useRef<HTMLDivElement>(null)
   const scrollbackRef = useRef('')
   const [exitInfo, setExitInfo] = useState<TerminalExitInfo | null>(null)
-  const [view, setView] = useState<'terminal' | 'trace'>('terminal')
+  // Structured-transport agents (Claude) have no PTY/raw screen at all — for
+  // them this drawer is diagnostics-only, so it opens straight to the trace
+  // view and never offers a toggle to a permanently-empty terminal pane.
+  const [view, setView] = useState<'terminal' | 'trace'>(inputSupported ? 'terminal' : 'trace')
 
   useEffect(() => {
-    if (!open || !containerRef.current) return
+    if (!open || !inputSupported || !containerRef.current) return
     setExitInfo(null)
     scrollbackRef.current = ''
 
@@ -112,13 +115,15 @@ export function TerminalDrawer({ open, onClose, sessionId, inputSupported, isRun
       <div className="ad-terminal-drawer__header">
         <span>{view === 'terminal' ? 'Terminal Output' : `Event Trace (${traces.length})`}</span>
         <div className="ad-terminal-drawer__header-actions">
-          <IconButton
-            label={view === 'terminal' ? 'Show event trace' : 'Show terminal'}
-            size="sm"
-            onClick={() => setView((v) => (v === 'terminal' ? 'trace' : 'terminal'))}
-          >
-            {view === 'terminal' ? <ListTree size={13} /> : <TerminalSquare size={13} />}
-          </IconButton>
+          {inputSupported && (
+            <IconButton
+              label={view === 'terminal' ? 'Show event trace' : 'Show terminal'}
+              size="sm"
+              onClick={() => setView((v) => (v === 'terminal' ? 'trace' : 'terminal'))}
+            >
+              {view === 'terminal' ? <ListTree size={13} /> : <TerminalSquare size={13} />}
+            </IconButton>
+          )}
           {isRunning && (
             <IconButton label="Interrupt" size="sm" onClick={() => getAgentDock().terminal.interrupt(sessionId)}>
               <Square size={13} />

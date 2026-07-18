@@ -73,4 +73,7 @@ export function registerSessionIpc(window: BrowserWindow): void {
   ipcMain.handle(IpcChannels.sessionRunCommand, (_event, sessionId: string, commandId: string) =>
     sessionService.runCommand(sessionId, commandId)
   )
+  ipcMain.handle(IpcChannels.sessionOpenExternalTerminal, (_event, sessionId: string) =>
+    sessionService.openExternalTerminal(sessionId)
+  )
 }

@@ -13,6 +13,10 @@ interface MenuProps {
   label: string
   items: MenuItem[]
   selectedId?: string | null
+  /** When set, shown in the trigger button instead of the static `label` —
+   *  e.g. "Sonnet" instead of "Model". Undefined preserves the old
+   *  always-static-label behavior for any caller that doesn't pass it. */
+  selectedLabel?: string | null
   onSelect: (id: string) => void
   disabled?: boolean
 }
@@ -21,14 +25,14 @@ interface MenuProps {
  *  (Model/Permissions/Commands) — renders nothing when there are no items,
  *  so callers can pass a capability list straight through without an extra
  *  visibility check. */
-export function Menu({ label, items, selectedId, onSelect, disabled }: MenuProps): React.JSX.Element | null {
+export function Menu({ label, items, selectedId, selectedLabel, onSelect, disabled }: MenuProps): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
   if (items.length === 0) return null
 
   return (
     <div className="ad-menu-wrap">
       <button className="ad-menu-trigger" onClick={() => setOpen((v) => !v)} disabled={disabled}>
-        <span>{label}</span>
+        <span>{selectedLabel ?? label}</span>
         <ChevronDown size={12} />
       </button>
       {open && (

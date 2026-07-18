@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getAgentDock } from '../lib/agentDockClient'
-import type { Session, SessionStatus } from '@shared/types'
+import type { LaunchTerminalResult, Session, SessionStatus } from '@shared/types'
 import { AGENT_DISPLAY_NAMES } from '@shared/types'
 import type { AgentEvent } from '@shared/events/agent-event'
 import type { TraceEvent } from '@shared/events/trace-event'
@@ -29,6 +29,11 @@ export interface SessionConversationState {
   isBusy: boolean
   loading: boolean
   traces: TraceEvent[]
+  /** The real model in use, reported by the transport itself — null until
+   *  known. Never guessed/hardcoded. */
+  currentModel: string | null
+  /** The real, effective permission mode reported the same way. */
+  effectivePermissionMode: string | null
 }
 
 export interface SessionConversationActions {
@@ -39,6 +44,7 @@ export interface SessionConversationActions {
   respondToInteraction(interactionId: string, optionId: string): Promise<void>
   setModel(modelId: string): Promise<void>
   runCommand(commandId: string): Promise<void>
+  openExternalTerminal(): Promise<LaunchTerminalResult>
 }
 
 const EMPTY_REDUCER_STATE = createReducerState()
@@ -60,11 +66,46 @@ function toPublicState(
     activityLabel: reducer.currentPhrase,
     pendingInteraction: reducer.pendingInteraction,
     warning: reducer.warning,
-    status: reducer.error ? 'error' : session?.status ?? 'idle',
+    status: deriveStatus(session, reducer),
     isBusy: reducer.isBusy,
     loading,
-    traces
+    traces,
+    currentModel: reducer.currentModel,
+    effectivePermissionMode: reducer.currentPermissionMode
   }
+}
+
+/** `session.status` (persisted, only refreshed on mount/event-driven local
+ *  sync — see the onEvent handler's setSession calls below) covers most
+ *  states, but a pending interaction is tracked live and reliably by the
+ *  pure reducer itself (turn.status/pendingInteraction — no round trip
+ *  needed), so it's checked first for the two "waiting for..." states. */
+/** The terminal-ish AgentEvent types that also change persisted
+ *  SessionStatus server-side (see session-service.ts's onEvent switch) —
+ *  kept in exact sync so the header never shows a stale status until the
+ *  next full refetch. Anything not listed here doesn't change status on
+ *  its own (e.g. assistant_delta, activity_started). */
+function sessionStatusForEvent(type: AgentEvent['type']): SessionStatus | null {
+  switch (type) {
+    case 'turn_completed':
+      return 'idle'
+    case 'turn_failed':
+      return 'error'
+    case 'turn_cancelled':
+      return 'cancelled'
+    case 'turn_exited':
+      return 'exited'
+    default:
+      return null
+  }
+}
+
+function deriveStatus(session: Session | null, reducer: AgentEventReducerState): SessionStatus {
+  if (reducer.turn?.status === 'awaiting_interaction' && reducer.pendingInteraction) {
+    return reducer.pendingInteraction.kind === 'permission' ? 'waiting_for_permission' : 'waiting_for_user'
+  }
+  if (reducer.error) return 'error'
+  return session?.status ?? 'idle'
 }
 
 /** Computes which high-level trace kind(s) an accepted event corresponds to,
@@ -163,6 +204,13 @@ export function useSessionConversation(sessionId: string | null): SessionConvers
           pushTrace({ ...t, eventId: payload.eventId, sequence: payload.sequence })
         }
         pushTrace({ kind: 'EVENT_ACCEPTED', eventId: payload.eventId, sequence: payload.sequence, detail: payload.event.type })
+        // Keep the locally-held `session.status` live rather than frozen at
+        // load time — session-service already persisted the matching status
+        // server-side by the time this event was broadcast (see
+        // session-service.ts's onEvent switch), this just mirrors it here
+        // so the header doesn't need a full session refetch to reflect it.
+        const terminalStatus = sessionStatusForEvent(payload.event.type)
+        if (terminalStatus) setSession((s) => (s ? { ...s, status: terminalStatus } : s))
       } else {
         pushTrace({ kind: 'EVENT_DROPPED_AS_DUPLICATE', eventId: payload.eventId, sequence: payload.sequence, detail: result.reason })
       }
@@ -260,7 +308,12 @@ export function useSessionConversation(sessionId: string | null): SessionConvers
     await getAgentDock().session.runCommand(sessionId, commandId)
   }
 
+  async function openExternalTerminal(): Promise<LaunchTerminalResult> {
+    if (!sessionId) return { launched: false, method: null, command: '', error: 'No active session.' }
+    return getAgentDock().session.openExternalTerminal(sessionId)
+  }
+
   const publicState = toPublicState(session, reducerState, loading, traces)
 
-  return { ...publicState, sendPrompt, retryMessage, interrupt, stop, respondToInteraction, setModel, runCommand }
+  return { ...publicState, sendPrompt, retryMessage, interrupt, stop, respondToInteraction, setModel, runCommand, openExternalTerminal }
 }

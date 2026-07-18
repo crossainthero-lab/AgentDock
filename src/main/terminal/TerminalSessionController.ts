@@ -6,10 +6,10 @@
 // "Open terminal" always reveals the literal same session (never a second
 // process, never a disconnected shell).
 //
-// Claude and Codex moved to structured JSON transports (see
-// ClaudeStreamJsonTransport/CodexJsonlTransport, which use
-// child-process-service.ts instead) and no longer touch this module or any
-// of its terminal/*.ts siblings — this file, TerminalScreenBuffer.ts,
+// Claude and Codex moved to structured transports (see
+// ClaudeAgentSdkTransport/CodexAgentSdkTransport — both backed by their
+// respective official SDKs) and no longer touch this module or any of its
+// terminal/*.ts siblings — this file, TerminalScreenBuffer.ts,
 // TerminalInteractionDetector.ts, and TranslationConflictDetector.ts exist
 // solely to support Antigravity's PTY-based classification path.
 import { ptyService, type ManagedProcess, type ProcessExitInfo, type SpawnOptions } from '../services/pty-service'

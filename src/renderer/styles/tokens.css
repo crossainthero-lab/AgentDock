@@ -62,6 +62,20 @@
   --color-diff-del-bg: rgba(229, 72, 77, 0.14);
   --color-diff-del-text: #f28b8e;
 
+  /* Syntax highlighting — refined, not a rainbow. Reused by CodeBlock's
+   * Prism theme via var() references so it stays in sync with light/dark. */
+  --color-syntax-keyword: #8aa8f0;
+  --color-syntax-string: #8fc98f;
+  --color-syntax-number: #d9a066;
+  --color-syntax-comment: #767a84;
+  --color-syntax-function: #e0c56f;
+  --color-syntax-type: #6fc4d9;
+  --color-syntax-variable: #e9eaed;
+  --color-syntax-operator: #9a9ea8;
+  --color-syntax-punctuation: #7d818b;
+  --color-syntax-tag: #e08fa0;
+  --color-syntax-attr: #d9b46f;
+
   color-scheme: dark;
 }
 
@@ -99,6 +113,18 @@
     --color-diff-del-bg: rgba(209, 52, 56, 0.1);
     --color-diff-del-text: #a32327;
 
+    --color-syntax-keyword: #3457c9;
+    --color-syntax-string: #29793a;
+    --color-syntax-number: #a05a12;
+    --color-syntax-comment: #7d818b;
+    --color-syntax-function: #8a6a10;
+    --color-syntax-type: #167a8c;
+    --color-syntax-variable: #1a1c20;
+    --color-syntax-operator: #5c6068;
+    --color-syntax-punctuation: #6b6f78;
+    --color-syntax-tag: #b23558;
+    --color-syntax-attr: #8a6a10;
+
     color-scheme: light;
   }
 }
@@ -135,6 +161,18 @@
   --color-diff-add-text: #21703c;
   --color-diff-del-bg: rgba(209, 52, 56, 0.1);
   --color-diff-del-text: #a32327;
+
+  --color-syntax-keyword: #3457c9;
+  --color-syntax-string: #29793a;
+  --color-syntax-number: #a05a12;
+  --color-syntax-comment: #7d818b;
+  --color-syntax-function: #8a6a10;
+  --color-syntax-type: #167a8c;
+  --color-syntax-variable: #1a1c20;
+  --color-syntax-operator: #5c6068;
+  --color-syntax-punctuation: #6b6f78;
+  --color-syntax-tag: #b23558;
+  --color-syntax-attr: #8a6a10;
 
   color-scheme: light;
 }

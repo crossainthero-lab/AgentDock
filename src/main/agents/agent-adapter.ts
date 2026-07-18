@@ -49,6 +49,11 @@ export interface AgentRunHandle {
    *  For process-per-turn agents this can only mean "applies starting next
    *  turn," not mid-turn — there's no live process to redirect. */
   setModel(modelId: string): void
+  /** Live permission-mode switch, if `capabilities.supportsLivePermissionSwitch`
+   *  is true. Optional — most adapters only apply a changed mode the next
+   *  time their process (re)spawns, via AgentRunContext.permissionMode, and
+   *  have no live control channel to redirect an already-running one. */
+  setPermissionMode?(mode: string): void
   /** Runs a native agent command (from capabilities.commands) without ever
    *  appearing as an ordinary chat message. */
   runCommand(commandId: string): void

@@ -1,76 +1,218 @@
-// Resolves a CLI executable to an absolute, verified-to-exist path using the
-// same PATH/PATHEXT semantics Windows itself uses, instead of relying on a
-// shell (execFile with shell:true) at detection time and a bare command name
-// at spawn time — the mismatch between those two was the reason session
-// spawning could silently fail even after detection reported an agent as
-// installed. One resolver, used by both.
+// Resolves a CLI executable to an absolute, verified-to-exist-and-work path
+// using the same PATH/PATHEXT semantics Windows itself uses (matching what
+// `where.exe`/`Get-Command` would report), instead of relying on a shell at
+// detection time and a bare command name at spawn time.
+//
+// Root-cause history: this resolver used to return the FIRST path/extension
+// combination that merely existed on disk. Two bugs in that made it possible
+// to resolve a real user's Codex/Claude install to a broken candidate:
+//
+//  1. It checked the bare, extensionless name BEFORE any real Windows
+//     extension (.EXE/.CMD/.BAT/.COM). Installing `@openai/codex-sdk` (a
+//     dependency of this project) transitively installs `@openai/codex`,
+//     which npm gives standard cross-platform bin shims in this project's
+//     OWN `node_modules/.bin/`: `codex` (a POSIX `#!/bin/sh` shebang
+//     script — not a valid Windows executable), `codex.cmd` (the real
+//     Windows shim), and `codex.ps1`. Since `npm run dev`/electron-vite
+//     prepend `node_modules/.bin` onto PATH for the dev process, and the
+//     resolver checked the bare name first, it matched the POSIX shell
+//     script and handed it straight to `spawn()`, which cannot execute it
+//     on Windows — surfacing as `spawn ...\node_modules\.bin\codex ENOENT`.
+//  2. It never validated a found path actually runs — a stale, corrupted,
+//     or wrong-format file at the right name/extension would still "win".
+//
+// Fixed by: (a) never searching inside any node_modules tree — a
+// standalone external CLI like Codex or Claude is never legitimately
+// installed as this project's own dependency; (b) trying real Windows
+// extensions before the bare name; (c) actually running each candidate
+// (a real subprocess probe) and rejecting ones that don't work, moving on
+// to the next candidate instead of trusting existsSync alone.
 import { existsSync } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
 
-export interface ResolveResult {
-  /** Absolute path to the resolved executable, or null if nothing matched. */
-  resolvedPath: string | null
-  /** Every candidate name / extension / directory combination that was checked, in order. */
+export interface CandidateSearchResult {
+  /** Every path that exists on disk, in priority order. For a configured
+   *  custom path this is at most one entry; for PATH search it's every
+   *  existing match across every PATH directory and extension. */
+  candidates: string[]
+  /** Every path/extension combination that was checked, in order — for
+   *  diagnostics shown to the user on failure. */
   checked: string[]
   pathDirCount: number
 }
 
+export interface ValidationOutcome {
+  ok: boolean
+  /** Human-readable reason the candidate was rejected — surfaced in
+   *  diagnostics. Only meaningful when ok is false. */
+  reason?: string
+  /** Raw stdout/stderr from the probe when it succeeded — lets the caller
+   *  parse a version string without re-running a second probe. */
+  output?: string
+}
+
+export type ValidateCandidate = (path: string) => Promise<ValidationOutcome>
+
+export interface ResolveResult {
+  resolvedPath: string | null
+  checked: string[]
+  pathDirCount: number
+  /** Which strategy produced the winning candidate — logged for diagnostics
+   *  so a resolution decision is never a mystery. */
+  strategy: 'custom-path' | 'path-search' | 'not-found'
+  /** Candidates that existed on disk but failed real validation — e.g. the
+   *  POSIX shell shim case above. Empty when the winning candidate was the
+   *  first one tried. */
+  rejected: Array<{ path: string; reason: string }>
+  /** The winning candidate's probe output, carried forward so callers never
+   *  need a second redundant subprocess spawn just to read it back. */
+  output?: string
+}
+
 function windowsExtensions(): string[] {
   const raw = process.env.PATHEXT
-  const exts = (raw ? raw.split(delimiter) : ['.COM', '.EXE', '.BAT', '.CMD'])
-    .map((e) => e.trim())
-    .filter(Boolean)
-  // Always allow the bare name too (no extension), in case it's already a
-  // fully-qualified filename or an extensionless script with a shebang.
-  return ['', ...exts]
+  const exts = (raw ? raw.split(delimiter) : ['.COM', '.EXE', '.BAT', '.CMD']).map((e) => e.trim()).filter(Boolean)
+  // Bare/extensionless goes LAST, not first. A real Windows executable
+  // always carries one of these extensions; a bare match only ever exists
+  // for Unix-style shebang scripts (e.g. npm's cross-platform bin shims),
+  // which Windows cannot execute directly via CreateProcess. Only fall
+  // back to it if nothing with a real extension matched anywhere on PATH.
+  return [...exts, '']
+}
+
+/** Windows env var names are case-insensitive but Node's process.env keys
+ *  are case-preserving — PATH can arrive as "PATH", "Path", or (seen in
+ *  practice when different launchers each set their own casing) both at
+ *  once with different contents. Merging every case-variant's directories
+ *  into one deduplicated list means a real install is never missed just
+ *  because a different key held the useful value. */
+function pathEnvValue(): string {
+  const seen = new Set<string>()
+  const dirs: string[] = []
+  for (const key of Object.keys(process.env)) {
+    if (key.toLowerCase() !== 'path') continue
+    const value = process.env[key]
+    if (!value) continue
+    for (const dir of value.split(delimiter)) {
+      const trimmed = dir.trim()
+      const lower = trimmed.toLowerCase()
+      if (trimmed && !seen.has(lower)) {
+        seen.add(lower)
+        dirs.push(trimmed)
+      }
+    }
+  }
+  return dirs.join(delimiter)
+}
+
+/** A standalone CLI tool like Codex or Claude is never meant to be resolved
+ *  from AgentDock's own dependency tree — see the module comment above for
+ *  the exact real-world collision this prevents. */
+function isInsideNodeModules(dir: string): boolean {
+  const normalized = dir.replace(/\\/g, '/').toLowerCase()
+  return normalized.includes('/node_modules/') || normalized.endsWith('/node_modules')
 }
 
 function pathDirs(): string[] {
-  const raw = process.env.PATH ?? process.env.Path ?? ''
-  return raw.split(delimiter).filter(Boolean)
+  return pathEnvValue()
+    .split(delimiter)
+    .map((d) => d.trim())
+    .filter(Boolean)
+    .filter((dir) => !isInsideNodeModules(dir))
 }
 
-/**
- * Resolves a single candidate (bare command name or absolute/relative path)
- * to an absolute path, trying every Windows PATHEXT extension. Non-Windows
- * platforms just check the candidate (and PATH dirs) as-is.
- */
-function tryResolveOne(candidate: string, checked: string[]): string | null {
+function withExtension(candidate: string, ext: string): string {
+  if (!ext) return candidate
+  return candidate.toLowerCase().endsWith(ext.toLowerCase()) ? candidate : candidate + ext
+}
+
+/** Finds every existing candidate for a single name/path, in priority
+ *  order (real extensions before bare). Pure and synchronous — no
+ *  subprocess validation here, just existsSync. Deduplicates: when the
+ *  candidate name already ends with a real extension (e.g. a custom path
+ *  of "codex.exe"), appending the bare "" extension resolves to the exact
+ *  same string as the .EXE attempt, which would otherwise double-count
+ *  the same file as two separate candidates. */
+function findOne(candidate: string, checked: string[]): string[] {
   const isWindows = process.platform === 'win32'
   const extensions = isWindows ? windowsExtensions() : ['']
+  const found: string[] = []
+  const seen = new Set<string>()
+
+  function tryPath(full: string): void {
+    checked.push(full)
+    const key = full.toLowerCase()
+    if (seen.has(key)) return
+    if (existsSync(full)) {
+      found.push(full)
+      seen.add(key)
+    }
+  }
 
   if (isAbsolute(candidate)) {
     for (const ext of extensions) {
-      const full = ext && !candidate.toLowerCase().endsWith(ext.toLowerCase()) ? candidate + ext : candidate
-      checked.push(full)
-      if (existsSync(full)) return full
+      tryPath(withExtension(candidate, ext))
     }
-    return null
+    return found
   }
 
-  // Bare command name: search every PATH directory.
+  // Bare command name: search every PATH directory (node_modules already
+  // excluded — see pathDirs above), trying every extension before moving
+  // to the next directory, so a real .exe two directories down still beats
+  // a bare shim in the first directory.
   for (const dir of pathDirs()) {
     for (const ext of extensions) {
-      const full = join(dir, ext && !candidate.toLowerCase().endsWith(ext.toLowerCase()) ? candidate + ext : candidate)
-      checked.push(full)
-      if (existsSync(full)) return full
+      tryPath(join(dir, withExtension(candidate, ext)))
     }
   }
-  return null
+  return found
 }
 
-export function resolveExecutable(candidates: string[], customPath: string | null): ResolveResult {
+export function findCandidates(candidateNames: string[], customPath: string | null): CandidateSearchResult {
   const checked: string[] = []
-  const ordered = customPath ? [customPath] : candidates
+  const candidates: string[] = []
 
-  for (const candidate of ordered) {
-    const resolved = tryResolveOne(candidate, checked)
-    if (resolved) {
-      return { resolvedPath: resolved, checked, pathDirCount: pathDirs().length }
+  if (customPath) {
+    candidates.push(...findOne(customPath, checked))
+  } else {
+    for (const name of candidateNames) {
+      candidates.push(...findOne(name, checked))
     }
   }
 
-  return { resolvedPath: null, checked, pathDirCount: pathDirs().length }
+  return { candidates, checked, pathDirCount: pathDirs().length }
+}
+
+/** Resolves a real, working executable: finds every candidate that exists
+ *  on disk (see findCandidates), then actually validates each one in
+ *  priority order (a real subprocess probe, injected via `validate` so
+ *  this stays testable without spawning real processes) and returns the
+ *  first one that genuinely works. A candidate that exists but fails
+ *  validation is recorded in `rejected` and skipped — never returned. */
+export async function resolveExecutable(
+  candidateNames: string[],
+  customPath: string | null,
+  validate: ValidateCandidate
+): Promise<ResolveResult> {
+  const { candidates, checked, pathDirCount } = findCandidates(candidateNames, customPath)
+  const rejected: Array<{ path: string; reason: string }> = []
+
+  for (const candidate of candidates) {
+    const outcome = await validate(candidate)
+    if (outcome.ok) {
+      return {
+        resolvedPath: candidate,
+        checked,
+        pathDirCount,
+        strategy: customPath ? 'custom-path' : 'path-search',
+        rejected,
+        output: outcome.output
+      }
+    }
+    rejected.push({ path: candidate, reason: outcome.reason ?? 'failed to run' })
+  }
+
+  return { resolvedPath: null, checked, pathDirCount, strategy: 'not-found', rejected }
 }
 
 /** Builds the detailed diagnostic message the task requires on resolution failure. */
@@ -83,11 +225,17 @@ export function describeResolutionFailure(params: {
 }): string {
   const { agentId, candidates, customPath, workspacePath, result } = params
   const lines = [
-    `Could not locate an executable for "${agentId}".`,
+    `Could not locate a working executable for "${agentId}".`,
     `Candidates checked: ${candidates.join(', ') || '(none)'}`,
     `Configured custom path: ${customPath ?? '(none)'}`,
     `Workspace: ${workspacePath}`,
     `PATH directories searched: ${result.pathDirCount}`,
+    ...(result.rejected.length > 0
+      ? [
+          `Found but failed to run (${result.rejected.length}):`,
+          ...result.rejected.map((r) => `  - ${r.path}: ${r.reason}`)
+        ]
+      : []),
     `Full list of paths checked (${result.checked.length}):`,
     ...result.checked.map((p) => `  - ${p}`)
   ]

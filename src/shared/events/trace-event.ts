@@ -20,6 +20,18 @@ export type TraceEventKind =
   | 'TURN_COMPLETED'
   | 'LISTENER_ATTACHED'
   | 'LISTENER_REMOVED'
+  /** A canUseTool-driven interaction was raised — `detail` is the
+   *  interaction kind ('permission' | 'choice' | ...), never the prompt
+   *  text or tool input itself. */
+  | 'INTERACTION_REQUIRED'
+  /** The user's decision was successfully delivered back to the live
+   *  handle (respondToInteraction didn't throw) — `detail` is the chosen
+   *  option id ('allow'/'deny'/a question's option id), never free text. */
+  | 'INTERACTION_RESPONDED'
+  /** respondToInteraction was called but nothing was pending for that id —
+   *  a stale/duplicate submission, correctly dropped rather than
+   *  re-delivered (see session-service.ts's respondToInteraction guard). */
+  | 'INTERACTION_STALE_OR_DUPLICATE'
 
 export interface TraceEvent {
   kind: TraceEventKind

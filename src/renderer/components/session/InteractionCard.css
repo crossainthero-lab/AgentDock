@@ -32,3 +32,24 @@
   gap: var(--space-2);
   margin-top: var(--space-3);
 }
+
+.ad-interaction-card__freetext {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.ad-interaction-card__freetext input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+}
+
+.ad-interaction-card__freetext input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}

@@ -122,6 +122,71 @@ describe('ClaudeEventMapper — turn completion', () => {
   })
 })
 
+describe('ClaudeEventMapper — model and permission-mode capture from system/init', () => {
+  it('emits model_info and permission_mode_info when system/init reports them', () => {
+    const { events } = feed([{ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-4-8', permissionMode: 'plan' }])
+    expect(events).toContainEqual({ type: 'model_info', sessionId: SESSION_ID, turnId: TURN_ID, model: 'claude-opus-4-8' })
+    expect(events).toContainEqual({ type: 'permission_mode_info', sessionId: SESSION_ID, turnId: TURN_ID, permissionMode: 'plan' })
+  })
+
+  it('emits neither event when system/init omits them (never fabricated)', () => {
+    const { events } = feed([initLine])
+    expect(events.some((e) => e.type === 'model_info' || e.type === 'permission_mode_info')).toBe(false)
+  })
+
+  it('mapMessage (already-parsed object, the SDK\'s normal delivery shape) is equivalent to mapLine', () => {
+    const state = createClaudeMapperState()
+    const result = ClaudeEventMapper.mapMessage(
+      { type: 'system', subtype: 'init', session_id: 'sid', model: 'claude-sonnet-5' },
+      state,
+      SESSION_ID,
+      TURN_ID
+    )
+    expect(result.events).toContainEqual({ type: 'model_info', sessionId: SESSION_ID, turnId: TURN_ID, model: 'claude-sonnet-5' })
+    expect(result.capturedSessionId).toBe('sid')
+  })
+})
+
+describe('ClaudeEventMapper — silent/meta tool suppression', () => {
+  it('AskUserQuestion never produces activity_started/activity_completed (handled as an interaction instead, see ClaudeAdapter)', () => {
+    const { events } = feed([
+      messageStart,
+      { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu1', name: 'AskUserQuestion' } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } } },
+      { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } }
+    ])
+    expect(events).toEqual([])
+  })
+
+  it('ExitPlanMode is likewise suppressed from ordinary tool activity', () => {
+    const { events } = feed([
+      messageStart,
+      { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu2', name: 'ExitPlanMode' } } },
+      { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } }
+    ])
+    expect(events).toEqual([])
+  })
+
+  it('an ordinary tool (Bash) is unaffected by the suppression list', () => {
+    const { events } = feed([
+      messageStart,
+      { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu3', name: 'Bash' } } },
+      { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } }
+    ])
+    expect(events).toEqual([
+      { type: 'activity_started', sessionId: SESSION_ID, turnId: TURN_ID, activityId: 'tu3', label: 'Bash', tool: 'Bash' },
+      { type: 'activity_completed', sessionId: SESSION_ID, turnId: TURN_ID, activityId: 'tu3', label: 'Bash', tool: 'Bash', status: 'done' }
+    ])
+  })
+})
+
+describe('ClaudeEventMapper — SDKResultError uses errors[], not result', () => {
+  it('reads the reason from `errors` (joined) when `result` is absent, matching the real SDKResultError shape', () => {
+    const { events } = feed([{ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['first problem', 'second problem'] }])
+    expect(events).toEqual([{ type: 'turn_failed', sessionId: SESSION_ID, turnId: TURN_ID, reason: 'first problem; second problem' }])
+  })
+})
+
 describe('ClaudeEventMapper — one process can carry multiple internal API turns (tool-using prompts)', () => {
   it('two message_start/message_stop cycles in one process produce two independent assistant_completed events', () => {
     const { events } = feed([

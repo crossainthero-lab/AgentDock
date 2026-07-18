@@ -33,7 +33,7 @@
 // previously nothing correlated an incoming event to a specific turn at
 // all, which was an undocumented second contributor (alongside the PTY
 // reflow bug) to cross-turn message corruption.
-import type { AgentChoice, AgentEvent, AgentInteraction } from './agent-event'
+import type { ActivityDetail, AgentChoice, AgentEvent, AgentInteraction } from './agent-event'
 import type { MessageContent, SessionMessage } from '../types'
 import { applyActivityEvent, categorizeToolLabel, createActivityState, resetActivity, type ActivityState } from './AgentActivityTracker'
 
@@ -53,7 +53,16 @@ export type ChatItem =
   | { kind: 'user'; id: string; text: string; deliveryState: DeliveryState; createdAt: number }
   | { kind: 'assistant'; id: string; text: string; createdAt: number }
   | { kind: 'system'; id: string; role: 'system' | 'error'; text: string; createdAt: number }
-  | { kind: 'tool-activity'; id: string; tool: string; summary: string; detail: string; isError: boolean; createdAt: number }
+  | {
+      kind: 'tool-activity'
+      id: string
+      tool: string
+      summary: string
+      detail: string
+      isError: boolean
+      createdAt: number
+      richDetail?: ActivityDetail
+    }
   | { kind: 'interaction-record'; id: string; prompt: string; choiceLabel: string; createdAt: number }
 
 export type PendingInteraction =
@@ -103,6 +112,12 @@ export interface AgentEventReducerState {
   warning: string | null
   error: string | null
   isBusy: boolean
+  /** The real model in use, as reported by the transport's own system/init
+   *  message — null until the first one arrives, never guessed. */
+  currentModel: string | null
+  /** The real, effective permission mode reported the same way — may differ
+   *  from what AgentDock requested (e.g. a policy override). */
+  currentPermissionMode: string | null
 }
 
 export function createReducerState(): AgentEventReducerState {
@@ -117,7 +132,9 @@ export function createReducerState(): AgentEventReducerState {
     pendingInteraction: null,
     warning: null,
     error: null,
-    isBusy: false
+    isBusy: false,
+    currentModel: null,
+    currentPermissionMode: null
   }
 }
 
@@ -131,7 +148,16 @@ function sessionMessageToChatItem(m: SessionMessage): ChatItem | null {
       if (m.role === 'system') return { kind: 'system', id: m.id, role: 'system', text: content.text, createdAt }
       return { kind: 'assistant', id: m.id, text: content.text, createdAt }
     case 'activity':
-      return { kind: 'tool-activity', id: m.id, tool: content.tool, summary: content.summary, detail: content.detail, isError: content.isError, createdAt }
+      return {
+        kind: 'tool-activity',
+        id: m.id,
+        tool: content.tool,
+        summary: content.summary,
+        detail: content.detail,
+        isError: content.isError,
+        createdAt,
+        richDetail: content.richDetail
+      }
     case 'interaction-record':
       return { kind: 'interaction-record', id: m.id, prompt: content.prompt, choiceLabel: content.choiceLabel, createdAt }
     default:
@@ -361,7 +387,8 @@ function applyEvent(state: AgentEventReducerState, event: AgentEvent, now: numbe
         summary: `Running ${event.label}…`,
         detail: event.label,
         isError: false,
-        createdAt: now
+        createdAt: now,
+        richDetail: event.detail
       }
       return {
         ...state,
@@ -377,7 +404,7 @@ function applyEvent(state: AgentEventReducerState, event: AgentEvent, now: numbe
       return {
         ...state,
         items: updateItem(state.items, scopedId(turn.id, event.activityId), (i) =>
-          i.kind === 'tool-activity' ? { ...i, detail: event.label ?? i.detail } : i
+          i.kind === 'tool-activity' ? { ...i, detail: event.label ?? i.detail, richDetail: event.detail ?? i.richDetail } : i
         ),
         activity: applyActivityEvent(state.activity, event, now),
         currentPhrase: event.label ? phraseForToolLabel(event.label) : state.currentPhrase,
@@ -393,7 +420,8 @@ function applyEvent(state: AgentEventReducerState, event: AgentEvent, now: numbe
           return {
             ...i,
             summary: event.summary ?? (event.status === 'error' ? `${i.tool} failed` : `Ran ${i.detail}`),
-            isError: event.status === 'error'
+            isError: event.status === 'error',
+            richDetail: event.detail ?? i.richDetail
           }
         }),
         activity: applyActivityEvent(state.activity, event, now),
@@ -429,6 +457,37 @@ function applyEvent(state: AgentEventReducerState, event: AgentEvent, now: numbe
       }
     }
 
+    // A user-initiated Stop/Interrupt — not an error, so unlike turn_failed
+    // this adds no red error bubble to the transcript.
+    case 'turn_cancelled':
+      return {
+        ...state,
+        turn: { ...turn, status: 'failed', completedAt: now },
+        currentPhrase: null,
+        isBusy: false
+      }
+
+    // The underlying process/query ended unexpectedly (crash, killed
+    // externally) with no result and no user-initiated stop — genuinely
+    // distinct from both a clean completion and a cancellation.
+    case 'turn_exited': {
+      const item: ChatItem = { kind: 'system', id: `error:${turn.id}`, role: 'error', text: event.reason, createdAt: now }
+      return {
+        ...state,
+        items: [...state.items, item],
+        turn: { ...turn, status: 'failed', completedAt: now },
+        currentPhrase: null,
+        error: event.reason,
+        isBusy: false
+      }
+    }
+
+    case 'model_info':
+      return { ...state, currentModel: event.model }
+
+    case 'permission_mode_info':
+      return { ...state, currentPermissionMode: event.permissionMode }
+
     default:
       return state
   }
@@ -445,6 +504,9 @@ export function clearPendingInteraction(state: AgentEventReducerState): AgentEve
  *  e.g. a process that wedged without ever exiting cleanly. */
 export function forceCompleteStaleTurn(state: AgentEventReducerState, maxAgeMs: number, now: number = Date.now()): AgentEventReducerState {
   if (!state.turn || state.turn.status === 'complete' || state.turn.status === 'failed') return state
+  // A real pending permission/question can legitimately take longer than
+  // the staleness window to answer — never force-fail out from under it.
+  if (state.turn.status === 'awaiting_interaction') return state
   if (now - state.turn.startedAt < maxAgeMs) return state
   return {
     ...state,

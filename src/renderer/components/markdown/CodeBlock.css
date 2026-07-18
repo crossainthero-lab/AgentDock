@@ -1,0 +1,68 @@
+.ad-codeblock {
+  margin: var(--space-3) 0;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.ad-codeblock__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  background: var(--color-bg-surface-raised);
+  border-bottom: 1px solid var(--color-border);
+  user-select: none;
+}
+
+.ad-codeblock__lang {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+
+.ad-codeblock__pre {
+  margin: 0;
+  padding: var(--space-3);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.ad-codeblock__pre code {
+  font-family: inherit;
+}
+
+.ad-codeblock__line {
+  display: block;
+}
+
+/* Diff blocks reuse the exact same diff palette as ChangesDrawer, so a
+ * pasted diff reads consistently with the rest of the app. */
+.ad-codeblock__diff-line {
+  display: block;
+  padding: 0 var(--space-2);
+  margin: 0 calc(var(--space-3) * -1);
+}
+.ad-codeblock__diff-line--add {
+  background: var(--color-diff-add-bg);
+  color: var(--color-diff-add-text);
+}
+.ad-codeblock__diff-line--del {
+  background: var(--color-diff-del-bg);
+  color: var(--color-diff-del-text);
+}
+.ad-codeblock__diff-line--hunk {
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+.ad-codeblock__diff-line--ctx {
+  color: var(--color-text-secondary);
+}

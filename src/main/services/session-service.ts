@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentId, CreateSessionInput, Session, SessionWithMessages } from '@shared/types'
+import type { AgentId, CreateSessionInput, LaunchTerminalResult, Session, SessionWithMessages } from '@shared/types'
 import type { AgentChoice, AgentEvent } from '@shared/events/agent-event'
 import type { TraceEvent } from '@shared/events/trace-event'
 import { sessionRepo } from '../db/repositories/session-repo'
@@ -10,6 +10,7 @@ import type { AgentRunHandle } from '../agents/agent-adapter'
 import type { ProcessExitInfo } from './pty-service'
 import { settingsService } from './settings-service'
 import { detectionService } from './detection-service'
+import { launchExternalTerminal } from './external-terminal-service'
 
 interface RunningSession {
   handle: AgentRunHandle
@@ -87,10 +88,10 @@ export const sessionService = {
     let run = running.get(sessionId)
 
     // Reuse the existing live process for this session — only spawn a new
-    // one if there's genuinely nothing running yet. For Claude/Codex's
-    // structured transports this is every turn (each is a one-shot process
-    // that has already exited by the time the next prompt arrives);
-    // Antigravity's PTY stays live across turns, same as before.
+    // one if there's genuinely nothing running yet. Claude's SDK-backed
+    // query and Antigravity's PTY both stay live across turns; only Codex's
+    // one-shot `exec` process has already exited by the time the next
+    // prompt arrives, so it alone spawns fresh every turn.
     if (!run || !run.handle.isRunning) {
       const settings = settingsService.get()
       const agentSettings = settings.agents[session.agentId]
@@ -135,7 +136,8 @@ export const sessionService = {
               tool,
               summary: event.summary ?? (event.status === 'error' ? `${tool} failed` : `Ran ${event.label}`),
               detail: event.label,
-              isError: event.status === 'error'
+              isError: event.status === 'error',
+              richDetail: event.detail
             })
             broadcastEvent(sessionId, event)
             return
@@ -149,6 +151,11 @@ export const sessionService = {
                 options: interaction.options
               })
             }
+            // 'choice' covers both a genuine yes/no-style confirmation and
+            // AskUserQuestion — both are "Claude is waiting on the user to
+            // answer something", not "waiting for a permission decision".
+            sessionRepo.setStatus(sessionId, interaction.kind === 'permission' ? 'waiting_for_permission' : 'waiting_for_user')
+            trace(sessionId, { kind: 'INTERACTION_REQUIRED', detail: interaction.kind })
             broadcastEvent(sessionId, event)
             return
           }
@@ -161,6 +168,30 @@ export const sessionService = {
               messageRepo.add(sessionId, 'error', { kind: 'text', text: event.reason })
             }
             sessionRepo.setStatus(sessionId, event.type === 'turn_failed' || runState.hadError ? 'error' : 'idle')
+            running.delete(sessionId)
+            pendingInteractions.delete(sessionId)
+            broadcastEvent(sessionId, event)
+            return
+          }
+          // A user-initiated Stop/Interrupt — distinct from turn_failed so
+          // the UI never renders a cancellation as a fabricated crash.
+          case 'turn_cancelled': {
+            const nativeId = handle.getNativeSessionId()
+            if (nativeId) sessionRepo.setNativeSessionId(sessionId, nativeId)
+            sessionRepo.setStatus(sessionId, 'cancelled')
+            running.delete(sessionId)
+            pendingInteractions.delete(sessionId)
+            broadcastEvent(sessionId, event)
+            return
+          }
+          // The process/query ended unexpectedly (crash, killed externally,
+          // connection lost) with no result and no user-initiated stop.
+          case 'turn_exited': {
+            const nativeId = handle.getNativeSessionId()
+            if (nativeId) sessionRepo.setNativeSessionId(sessionId, nativeId)
+            runState.hadError = true
+            messageRepo.add(sessionId, 'error', { kind: 'text', text: event.reason })
+            sessionRepo.setStatus(sessionId, 'exited')
             running.delete(sessionId)
             pendingInteractions.delete(sessionId)
             broadcastEvent(sessionId, event)
@@ -189,6 +220,12 @@ export const sessionService = {
       run = runState
     } else {
       console.log(`[session] reusing live process for session ${sessionId}`)
+      // The process/query was already running when this turn started, so
+      // it never picked up a permission-mode change made via Settings in
+      // between turns — apply it live if the adapter supports that
+      // (Claude's SDK-backed Query does; see capability-registry.ts).
+      const settings = settingsService.get()
+      run.handle.setPermissionMode?.(settings.agents[session.agentId].permissionMode)
     }
 
     trace(sessionId, { kind: 'PTY_WRITE_REQUESTED' })
@@ -205,7 +242,22 @@ export const sessionService = {
     // not just the message record, so a second click can't re-send input
     // (e.g. a second "y\r" or a second arrow-menu overshoot) into the live
     // CLI once the interaction has already been consumed.
-    if (!pending || pending.interactionId !== interactionId) return
+    if (!pending || pending.interactionId !== interactionId) {
+      trace(sessionId, { kind: 'INTERACTION_STALE_OR_DUPLICATE', detail: interactionId })
+      return
+    }
+
+    // Deliver the decision to the live handle FIRST, and only mark the
+    // interaction resolved (record it, clear it, return the session to
+    // 'running') if that actually succeeds — a failed/throwing delivery
+    // must leave the prompt visible and pending rather than silently
+    // dropping the user's answer.
+    try {
+      running.get(sessionId)?.handle.respondToInteraction(interactionId, optionId)
+    } catch (err) {
+      console.error(`[session] respondToInteraction delivery failed for ${sessionId}/${interactionId}`, err)
+      return
+    }
 
     const option = pending.options.find((o) => o.id === optionId)
     messageRepo.add(sessionId, 'system', {
@@ -214,7 +266,8 @@ export const sessionService = {
       choiceLabel: option?.label ?? optionId
     })
     pendingInteractions.delete(sessionId)
-    running.get(sessionId)?.handle.respondToInteraction(interactionId, optionId)
+    sessionRepo.setStatus(sessionId, 'running')
+    trace(sessionId, { kind: 'INTERACTION_RESPONDED', detail: optionId })
   },
 
   setModel(sessionId: string, modelId: string): void {
@@ -223,6 +276,30 @@ export const sessionService = {
 
   runCommand(sessionId: string, commandId: string): void {
     running.get(sessionId)?.handle.runCommand(commandId)
+  },
+
+  /** Opens a brand-new, independent interactive terminal in the session's
+   *  workspace — never a reattachment to the live process backing this
+   *  session (no such reattachment exists; see external-terminal-service.ts). */
+  async openExternalTerminal(sessionId: string): Promise<LaunchTerminalResult> {
+    const session = sessionRepo.get(sessionId)
+    if (!session) throw new Error('Session not found.')
+
+    const settings = settingsService.get()
+    const agentSettings = settings.agents[session.agentId]
+    const detection = await detectionService.detect(session.agentId, agentSettings.customPath)
+    if (!detection.installed || !detection.executablePath) {
+      const error = detection.error ?? `${agentDisplay(session.agentId)} is not installed.`
+      return { launched: false, method: null, command: '', error }
+    }
+
+    return launchExternalTerminal({
+      agentId: session.agentId,
+      executablePath: detection.executablePath,
+      workspacePath: workspacePathFor(session.workspaceId),
+      permissionMode: agentSettings.permissionMode,
+      nativeSessionId: sessionRepo.getNativeSessionId(sessionId)
+    })
   },
 
   interrupt(sessionId: string): void {

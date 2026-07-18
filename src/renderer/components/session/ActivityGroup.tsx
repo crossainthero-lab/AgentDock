@@ -3,12 +3,15 @@ import { useState } from 'react'
 import { ChevronRight, Loader2 } from 'lucide-react'
 import type { ActivityItem } from './activity'
 import { summarizeActivityGroup } from './activity'
+import { ActivityDetailCard } from './ActivityDetailCard'
 import './ActivityGroup.css'
 
-export function ActivityGroup({ items }: { items: ActivityItem[] }): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false)
-  const running = items.some((i) => i.status === 'running')
+export function ActivityGroup({ items, workspaceId }: { items: ActivityItem[]; workspaceId: string | null }): React.JSX.Element {
   const hasError = items.some((i) => i.isError)
+  // Failures are surfaced immediately, not hidden behind a collapsed
+  // toggle — everything else starts collapsed to stay non-noisy.
+  const [expanded, setExpanded] = useState(hasError)
+  const running = items.some((i) => i.status === 'running')
 
   return (
     <div className={`ad-activity-group${hasError ? ' ad-activity-group--error' : ''}`}>
@@ -26,10 +29,14 @@ export function ActivityGroup({ items }: { items: ActivityItem[] }): React.JSX.E
                 {item.status === 'running' && <span className="ad-activity-item__running">running…</span>}
                 {item.isError && <span className="ad-activity-item__failed">failed</span>}
               </div>
-              {item.input != null && (
-                <pre className="ad-activity-item__code">{safeStringify(item.input)}</pre>
+              {item.richDetail ? (
+                <ActivityDetailCard detail={item.richDetail} workspaceId={workspaceId} />
+              ) : (
+                <>
+                  {item.input != null && <pre className="ad-activity-item__code">{safeStringify(item.input)}</pre>}
+                  {item.detail && <pre className="ad-activity-item__code">{item.detail}</pre>}
+                </>
               )}
-              {item.detail && <pre className="ad-activity-item__code">{item.detail}</pre>}
             </div>
           ))}
         </div>

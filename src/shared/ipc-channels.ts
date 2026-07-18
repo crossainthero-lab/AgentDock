@@ -11,6 +11,8 @@ export const IpcChannels = {
   agentsDetect: 'agents:detect',
   agentsSetCustomPath: 'agents:setCustomPath',
   agentsGetCapabilities: 'agents:getCapabilities',
+  agentsBrowseExecutable: 'agents:browseExecutable',
+  agentsTestExecutable: 'agents:testExecutable',
 
   sessionCreate: 'session:create',
   sessionList: 'session:list',
@@ -24,6 +26,12 @@ export const IpcChannels = {
   sessionRespondInteraction: 'session:respondInteraction',
   sessionSetModel: 'session:setModel',
   sessionRunCommand: 'session:runCommand',
+  sessionOpenExternalTerminal: 'session:openExternalTerminal',
+
+  mediaResolveImage: 'media:resolveImage',
+  mediaRevealInFolder: 'media:revealInFolder',
+  mediaOpenLocalPath: 'media:openLocalPath',
+  mediaOpenExternalLink: 'media:openExternalLink',
 
   gitChangedFiles: 'git:changedFiles',
   gitDiff: 'git:diff',

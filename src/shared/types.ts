@@ -1,6 +1,7 @@
 // Shared TypeScript contracts used by main, preload, and renderer.
 // Keep this file free of Node/Electron/DOM-specific types so it can be
 // imported from any of the three processes without pulling in the wrong lib.
+import type { ActivityDetail } from './events/agent-event'
 
 export type AgentId = 'claude-code' | 'codex' | 'antigravity'
 
@@ -22,6 +23,19 @@ export interface AgentDetection {
   structuredOutput: boolean
 }
 
+/** Result of the Settings "Test" action — validates one specific candidate
+ *  path directly (not a PATH search) so a user can confirm a custom
+ *  executable override genuinely works before relying on it. */
+export interface ExecutableTestResult {
+  path: string
+  /** e.g. "exe", "cmd (npm shim)", "bat" — helps explain how it was launched. */
+  type: string
+  ok: boolean
+  version: string | null
+  output: string | null
+  error: string | null
+}
+
 export interface Workspace {
   id: string
   path: string
@@ -30,7 +44,15 @@ export interface Workspace {
   lastOpenedAt: string
 }
 
-export type SessionStatus = 'idle' | 'running' | 'error' | 'stopped'
+export type SessionStatus =
+  | 'idle'
+  | 'running'
+  | 'error'
+  | 'stopped'
+  | 'waiting_for_permission'
+  | 'waiting_for_user'
+  | 'cancelled'
+  | 'exited'
 
 export interface Session {
   id: string
@@ -46,7 +68,17 @@ export type MessageRole = 'user' | 'assistant' | 'system' | 'error' | 'approval'
 
 export type MessageContent =
   | { kind: 'text'; text: string }
-  | { kind: 'activity'; tool: string; summary: string; detail: string; isError: boolean }
+  | {
+      kind: 'activity'
+      tool: string
+      summary: string
+      detail: string
+      isError: boolean
+      /** Structured payload for a rich activity card (command output, changed
+       *  files, etc.) — see ActivityDetail in agent-event.ts. Optional/absent
+       *  for agents that only report a plain label (e.g. Claude, Antigravity). */
+      richDetail?: ActivityDetail
+    }
   | { kind: 'approval-record'; command: string; decision: ApprovalDecision }
   /** A resolved native interaction card (choice/permission/auth), so answers
    *  render as a compact inline note instead of an ordinary chat bubble. */
@@ -148,6 +180,16 @@ export interface Diagnostics {
 export interface TerminalExitInfo {
   exitCode: number | null
   signal: string | null
+}
+
+export interface LaunchTerminalResult {
+  launched: boolean
+  method: 'wt' | 'cmd' | null
+  /** The reconstructed command line, shown to the user for transparency —
+   *  this is always a NEW interactive session, never a reattachment to the
+   *  session's live process. */
+  command: string
+  error?: string
 }
 
 // --- Agent capability contract -------------------------------------------

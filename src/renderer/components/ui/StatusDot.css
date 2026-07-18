@@ -20,6 +20,18 @@
 .ad-status-dot--stopped {
   background: var(--color-text-tertiary);
 }
+.ad-status-dot--cancelled {
+  background: var(--color-text-tertiary);
+}
+.ad-status-dot--exited {
+  background: var(--color-danger);
+}
+.ad-status-dot--waiting_for_permission,
+.ad-status-dot--waiting_for_user {
+  background: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-bg-selected);
+  animation: ad-pulse 1.6s ease-in-out infinite;
+}
 
 @keyframes ad-pulse {
   0%,

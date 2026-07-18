@@ -1,9 +1,9 @@
 import type React from 'react'
 import { useEffect, useState } from 'react'
-import { CheckCircle2, RefreshCw, XCircle } from 'lucide-react'
+import { CheckCircle2, FolderOpen, RefreshCw, RotateCcw, XCircle } from 'lucide-react'
 import { useAppState } from '../../state/AppStateContext'
 import { getAgentDock } from '../../lib/agentDockClient'
-import { AGENT_DISPLAY_NAMES, AGENT_IDS, type AgentCapabilities, type AgentId } from '@shared/types'
+import { AGENT_DISPLAY_NAMES, AGENT_IDS, type AgentCapabilities, type AgentId, type ExecutableTestResult } from '@shared/types'
 import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
 import './AgentsSettings.css'
@@ -13,6 +13,9 @@ export function AgentsSettings(): React.JSX.Element {
   const [pathDrafts, setPathDrafts] = useState<Partial<Record<AgentId, string>>>({})
   const [savingPath, setSavingPath] = useState<AgentId | null>(null)
   const [refreshingOne, setRefreshingOne] = useState<AgentId | null>(null)
+  const [browsingAgent, setBrowsingAgent] = useState<AgentId | null>(null)
+  const [testingAgent, setTestingAgent] = useState<AgentId | null>(null)
+  const [testResults, setTestResults] = useState<Partial<Record<AgentId, ExecutableTestResult>>>({})
   // Each agent has its own native set of permission modes (see
   // capability-registry.ts) — no shared enum applies across all three.
   const [capabilities, setCapabilities] = useState<Partial<Record<AgentId, AgentCapabilities>>>({})
@@ -28,10 +31,10 @@ export function AgentsSettings(): React.JSX.Element {
     }
   }, [])
 
-  async function saveCustomPath(agentId: AgentId): Promise<void> {
+  async function saveCustomPath(agentId: AgentId, valueOverride?: string | null): Promise<void> {
     setSavingPath(agentId)
     try {
-      const value = pathDrafts[agentId]?.trim() || null
+      const value = valueOverride !== undefined ? valueOverride : pathDrafts[agentId]?.trim() || null
       await getAgentDock().agents.setCustomPath(agentId, value)
       await refreshAgents()
     } finally {
@@ -47,6 +50,37 @@ export function AgentsSettings(): React.JSX.Element {
     } finally {
       setRefreshingOne(null)
     }
+  }
+
+  async function browseFor(agentId: AgentId): Promise<void> {
+    setBrowsingAgent(agentId)
+    try {
+      const picked = await getAgentDock().agents.browseExecutable(agentId)
+      if (picked === null) return
+      setPathDrafts((prev) => ({ ...prev, [agentId]: picked }))
+      setTestResults((prev) => ({ ...prev, [agentId]: undefined }))
+    } finally {
+      setBrowsingAgent(null)
+    }
+  }
+
+  async function testFor(agentId: AgentId): Promise<void> {
+    const detection = agents.find((a) => a.agentId === agentId)
+    const candidate = (pathDrafts[agentId]?.trim() || settings?.agents[agentId]?.customPath || detection?.executablePath) ?? null
+    if (!candidate) return
+    setTestingAgent(agentId)
+    try {
+      const result = await getAgentDock().agents.testExecutable(agentId, candidate)
+      setTestResults((prev) => ({ ...prev, [agentId]: result }))
+    } finally {
+      setTestingAgent(null)
+    }
+  }
+
+  async function resetToAutoDetect(agentId: AgentId): Promise<void> {
+    setPathDrafts((prev) => ({ ...prev, [agentId]: '' }))
+    setTestResults((prev) => ({ ...prev, [agentId]: undefined }))
+    await saveCustomPath(agentId, null)
   }
 
   return (
@@ -91,18 +125,55 @@ export function AgentsSettings(): React.JSX.Element {
             </div>
 
             <div className="ad-settings-field">
-              <span className="ad-settings-field__label">Custom executable path</span>
+              <span className="ad-settings-field__label">{AGENT_DISPLAY_NAMES[agentId]} executable</span>
               <div className="ad-agent-settings-card__path-row">
                 <input
                   type="text"
-                  placeholder="Leave empty to search PATH"
-                  defaultValue={agentSettings?.customPath ?? ''}
+                  placeholder="Auto-detect (search PATH)"
+                  value={pathDrafts[agentId] ?? agentSettings?.customPath ?? ''}
                   onChange={(e) => setPathDrafts((prev) => ({ ...prev, [agentId]: e.target.value }))}
                 />
+                <Button variant="ghost" size="sm" onClick={() => void browseFor(agentId)} disabled={browsingAgent === agentId}>
+                  {browsingAgent === agentId ? <Spinner size={12} /> : <FolderOpen size={12} />}
+                  Browse…
+                </Button>
+              </div>
+              <div className="ad-agent-settings-card__path-row">
                 <Button variant="secondary" size="sm" onClick={() => void saveCustomPath(agentId)} disabled={savingPath === agentId}>
                   {savingPath === agentId ? <Spinner size={12} /> : 'Save'}
                 </Button>
+                <Button variant="ghost" size="sm" onClick={() => void testFor(agentId)} disabled={testingAgent === agentId}>
+                  {testingAgent === agentId ? <Spinner size={12} /> : 'Test'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void resetToAutoDetect(agentId)}
+                  disabled={savingPath === agentId || !(agentSettings?.customPath || pathDrafts[agentId])}
+                >
+                  <RotateCcw size={12} />
+                  Reset to auto-detect
+                </Button>
               </div>
+
+              {testResults[agentId] && (
+                <div
+                  className={
+                    testResults[agentId]!.ok
+                      ? 'ad-agent-settings-card__test-result ad-agent-settings-card__test-result--ok'
+                      : 'ad-agent-settings-card__test-result ad-agent-settings-card__test-result--bad'
+                  }
+                >
+                  <div>{testResults[agentId]!.ok ? 'Launch succeeded' : 'Launch failed'}</div>
+                  <div>Path: {testResults[agentId]!.path}</div>
+                  <div>Type: {testResults[agentId]!.type}</div>
+                  {testResults[agentId]!.ok ? (
+                    <div>Version: {testResults[agentId]!.version ?? 'unknown'}</div>
+                  ) : (
+                    <div>Error: {testResults[agentId]!.error}</div>
+                  )}
+                </div>
+              )}
             </div>
 
             <label className="ad-settings-field">

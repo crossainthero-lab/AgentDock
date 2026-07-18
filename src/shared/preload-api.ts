@@ -8,7 +8,9 @@ import type {
   CreateSessionInput,
   Diagnostics,
   DiffResult,
+  ExecutableTestResult,
   HandoffExecuteInput,
+  LaunchTerminalResult,
   Session,
   SessionWithMessages,
   Settings,
@@ -46,6 +48,13 @@ export interface AgentDockApi {
     detect(agentId: AgentId): Promise<AgentDetection>
     setCustomPath(agentId: AgentId, customPath: string | null): Promise<AgentDetection>
     getCapabilities(agentId: AgentId): Promise<AgentCapabilities>
+    /** Opens a native file picker for choosing an executable override.
+     *  Returns null if the user cancels. */
+    browseExecutable(agentId: AgentId): Promise<string | null>
+    /** Validates one specific path directly — used by the Settings "Test"
+     *  button, independent of whatever is currently saved as the custom
+     *  path or auto-detected. */
+    testExecutable(agentId: AgentId, path: string): Promise<ExecutableTestResult>
   }
   session: {
     create(input: CreateSessionInput): Promise<Session>
@@ -72,12 +81,29 @@ export interface AgentDockApi {
     /** Runs a native agent command (from capabilities.commands) — never
      *  appears as an ordinary chat message. */
     runCommand(sessionId: string, commandId: string): Promise<void>
+    /** Opens a brand-new, independent interactive terminal in the session's
+     *  workspace — never a reattachment to this session's own live process
+     *  (no such reattachment exists). Surfaces failure via the returned
+     *  result rather than failing silently. */
+    openExternalTerminal(sessionId: string): Promise<LaunchTerminalResult>
   }
   git: {
     changedFiles(workspaceId: string): Promise<ChangedFile[]>
     diff(workspaceId: string, path: string): Promise<DiffResult>
     branch(workspaceId: string): Promise<string | null>
     revertFile(workspaceId: string, path: string): Promise<void>
+  }
+  /** Backs the rich Markdown renderer's link/image affordances — every
+   *  method is workspace-scoped and path-validated main-process-side (see
+   *  media-service.ts); the renderer never gets unrestricted filesystem
+   *  access. */
+  media: {
+    resolveImage(workspaceId: string, path: string): Promise<{ dataUrl?: string; error?: string }>
+    revealInFolder(workspaceId: string, path: string): Promise<{ ok: boolean; error?: string }>
+    openLocalPath(workspaceId: string, path: string): Promise<{ ok: boolean; error?: string }>
+    /** Opens in the OS default browser — never inside the Electron window.
+     *  Only http/https are honored; see media-service.ts. */
+    openExternalLink(url: string): Promise<{ ok: boolean; error?: string }>
   }
   approvals: {
     respond(approvalId: string, decision: ApprovalDecision): Promise<void>

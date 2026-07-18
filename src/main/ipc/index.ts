@@ -8,10 +8,11 @@ import { registerApprovalsIpc } from './approvals'
 import { registerTerminalIpc } from './terminal'
 import { registerHandoffIpc } from './handoff'
 import { registerWindowIpc } from './window'
+import { registerMediaIpc } from './media'
 
 export function registerAllIpc(window: BrowserWindow): void {
   registerWorkspaceIpc(window)
-  registerAgentIpc()
+  registerAgentIpc(window)
   registerSessionIpc(window)
   registerGitIpc()
   registerSettingsIpc()
@@ -19,4 +20,5 @@ export function registerAllIpc(window: BrowserWindow): void {
   registerTerminalIpc()
   registerHandoffIpc(window)
   registerWindowIpc(window)
+  registerMediaIpc()
 }

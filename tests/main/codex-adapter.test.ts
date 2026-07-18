@@ -2,52 +2,112 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent } from '../../src/shared/events/agent-event'
 import type { AgentRunContext } from '../../src/main/agents/agent-adapter'
 
-interface MockProc {
-  pid: number
-  isRunning: boolean
-  kill: ReturnType<typeof vi.fn>
-  onLine: (cb: (line: string) => void) => () => void
-  onExit: (cb: (info: { exitCode: number | null; signal: number | null }) => void) => () => void
-  _lineListeners: Array<(line: string) => void>
-  _exitListeners: Array<(info: { exitCode: number | null; signal: number | null }) => void>
+// A controllable stand-in for the SDK's `Thread` (runStreamed() returns an
+// async generator of ThreadEvent; an aborted signal ends it the same way
+// the real SDK's process-kill-on-abort does — by throwing, confirmed by
+// reading the SDK's compiled source: an aborted child exits with a signal,
+// which the SDK's own exec loop turns into a thrown Error).
+/** Mirrors one real per-turn subprocess session's state — a fresh one is
+ *  created for every runStreamed() call, matching how the real Thread
+ *  spins up a genuinely new underlying process per turn even though the
+ *  Thread object itself persists across turns. */
+class MockTurnSession {
+  readonly queue: unknown[] = []
+  readonly waiting: Array<{ resolve: (r: IteratorResult<unknown>) => void; reject: (err: unknown) => void }> = []
+  closed = false
+  failure: Error | null = null
 }
 
-const spawnCalls: Array<{ command: string; args: string[]; proc: MockProc }> = []
+class MockThread {
+  id: string | null
+  private currentSession: MockTurnSession | null = null
+  readonly runStreamedCalls: Array<{ input: unknown; signal?: AbortSignal }> = []
 
-function makeMockProc(): MockProc {
-  const proc: MockProc = {
-    pid: 2000 + spawnCalls.length,
-    isRunning: true,
-    kill: vi.fn(() => {
-      proc.isRunning = false
-    }),
-    _lineListeners: [],
-    _exitListeners: [],
-    onLine(cb) {
-      proc._lineListeners.push(cb)
-      return () => {}
-    },
-    onExit(cb) {
-      proc._exitListeners.push(cb)
-      return () => {}
+  constructor(id: string | null = null) {
+    this.id = id
+  }
+
+  push(event: unknown): void {
+    const e = event as { type?: string; thread_id?: string }
+    if (e.type === 'thread.started' && typeof e.thread_id === 'string') this.id = e.thread_id
+    const session = this.currentSession
+    if (!session) throw new Error('MockThread.push() called before runStreamed()')
+    const waiter = session.waiting.shift()
+    if (waiter) waiter.resolve({ value: event, done: false })
+    else session.queue.push(event)
+  }
+
+  /** Ends the current turn's stream by throwing — rejects an
+   *  already-pending pull too, not just future ones (mirrors
+   *  AbortController.abort() being synchronous). */
+  fail(err: Error): void {
+    const session = this.currentSession
+    if (!session) return
+    session.failure = err
+    session.closed = true
+    while (session.waiting.length > 0) session.waiting.shift()?.reject(err)
+  }
+
+  /** Ends the current turn's stream cleanly, as a real process exiting
+   *  normally after finishing a turn would. */
+  end(): void {
+    const session = this.currentSession
+    if (!session) return
+    session.closed = true
+    while (session.waiting.length > 0) session.waiting.shift()?.resolve({ value: undefined, done: true })
+  }
+
+  async runStreamed(input: unknown, turnOptions?: { signal?: AbortSignal }): Promise<{ events: AsyncGenerator<unknown> }> {
+    this.runStreamedCalls.push({ input, signal: turnOptions?.signal })
+    const session = new MockTurnSession()
+    this.currentSession = session
+    turnOptions?.signal?.addEventListener('abort', () => {
+      if (this.currentSession === session) this.fail(new Error('Codex Exec exited with signal SIGTERM'))
+    })
+    async function* gen(): AsyncGenerator<unknown> {
+      for (;;) {
+        let result: IteratorResult<unknown>
+        if (session.queue.length > 0) {
+          result = { value: session.queue.shift(), done: false }
+        } else if (session.closed) {
+          if (session.failure) throw session.failure
+          return
+        } else {
+          result = await new Promise<IteratorResult<unknown>>((resolve, reject) => session.waiting.push({ resolve, reject }))
+        }
+        if (result.done) return
+        yield result.value
+      }
     }
+    return { events: gen() }
   }
-  return proc
 }
 
-function emitLine(proc: MockProc, obj: unknown): void {
-  for (const cb of proc._lineListeners) cb(JSON.stringify(obj))
+class MockCodex {
+  readonly threads: MockThread[] = []
+  constructor(public readonly options: unknown) {}
+  startThread(options: unknown): MockThread {
+    const t = new MockThread()
+    ;(t as unknown as { __startOptions: unknown }).__startOptions = options
+    this.threads.push(t)
+    return t
+  }
+  resumeThread(id: string, options: unknown): MockThread {
+    const t = new MockThread(id)
+    ;(t as unknown as { __resumeOptions: unknown }).__resumeOptions = options
+    this.threads.push(t)
+    return t
+  }
 }
 
-vi.mock('../../src/main/services/child-process-service', () => ({
-  childProcessService: {
-    spawn: (command: string, args: string[]) => {
-      const proc = makeMockProc()
-      spawnCalls.push({ command, args, proc })
-      return proc
-    },
-    killAll: vi.fn()
-  }
+const codexInstances: MockCodex[] = []
+
+vi.mock('@openai/codex-sdk', () => ({
+  Codex: vi.fn().mockImplementation((options: unknown) => {
+    const instance = new MockCodex(options)
+    codexInstances.push(instance)
+    return instance
+  })
 }))
 
 import { codexAdapter } from '../../src/main/agents/codex/CodexAdapter'
@@ -60,125 +120,211 @@ const ctx: AgentRunContext = {
   executablePath: 'codex'
 }
 
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 describe('codexAdapter', () => {
   beforeEach(() => {
-    spawnCalls.length = 0
+    codexInstances.length = 0
   })
 
-  it('spawns `codex exec <prompt> --json -C <workspace>` for the first turn', () => {
+  it('constructs the SDK Codex client with the resolved executable path', async () => {
     const handle = codexAdapter.start(ctx)
-    handle.send('fix the bug', 't1')
+    handle.send('do the thing', 't1')
+    await flushMicrotasks()
 
-    expect(spawnCalls).toHaveLength(1)
-    expect(spawnCalls[0].command).toBe('codex')
-    expect(spawnCalls[0].args).toEqual(['exec', 'fix the bug', '--json', '-C', '/tmp/project'])
+    expect(codexInstances).toHaveLength(1)
+    expect(codexInstances[0].options).toMatchObject({ codexPathOverride: 'codex' })
   })
 
-  it('maps permission modes to --sandbox flags', () => {
-    const handle = codexAdapter.start({ ...ctx, permissionMode: 'workspace-write' })
-    handle.send('go', 't1')
+  it('starts a fresh thread with the workspace cwd and never-ask approval policy (no human present in exec/JSON mode)', async () => {
+    const handle = codexAdapter.start(ctx)
+    handle.send('do the thing', 't1')
+    await flushMicrotasks()
 
-    expect(spawnCalls[0].args).toContain('--sandbox')
-    expect(spawnCalls[0].args).toContain('workspace-write')
+    const thread = codexInstances[0].threads[0]
+    expect((thread as unknown as { __startOptions: unknown }).__startOptions).toMatchObject({
+      workingDirectory: '/tmp/project',
+      approvalPolicy: 'never'
+    })
   })
 
-  it('maps "bypass" to --dangerously-bypass-approvals-and-sandbox', () => {
-    const handle = codexAdapter.start({ ...ctx, permissionMode: 'bypass' })
-    handle.send('go', 't1')
-
-    expect(spawnCalls[0].args).toContain('--dangerously-bypass-approvals-and-sandbox')
-  })
-
-  it('resumes via `codex exec resume <threadId> <prompt> --json` once a thread_id has been captured', () => {
-    const handle = codexAdapter.start({ ...ctx, nativeSessionId: 'thread-abc' })
-    handle.send('continue please', 't1')
-
-    expect(spawnCalls[0].args).toEqual(['exec', 'resume', 'thread-abc', 'continue please', '--json'])
-  })
-
-  it('spawns a fresh process every turn — never reuses a live process across turns', () => {
+  it('reuses the same live thread for a second turn instead of starting a new one', async () => {
     const handle = codexAdapter.start(ctx)
     handle.send('first turn', 't1')
-    emitLine(spawnCalls[0].proc, { type: 'turn.completed', usage: {} })
-    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 0, signal: null })
+    await flushMicrotasks()
+
+    // A Thread only supports one active runStreamed() call at a time
+    // (confirmed against the real SDK — see CodexAgentSdkTransport's
+    // launchChain doc comment), so the second turn's own runStreamed()
+    // call is legitimately queued behind the first turn's completion.
+    const thread = codexInstances[0].threads[0]
+    thread.push({ type: 'turn.completed', usage: {} })
+    thread.end()
+    await flushMicrotasks()
 
     handle.send('second turn', 't2')
-    expect(spawnCalls).toHaveLength(2)
+    await flushMicrotasks()
+
+    expect(codexInstances).toHaveLength(1)
+    expect(codexInstances[0].threads).toHaveLength(1)
+    expect(codexInstances[0].threads[0].runStreamedCalls).toHaveLength(2)
   })
 
-  it('interrupt() kills the in-flight process', () => {
-    const handle = codexAdapter.start(ctx)
+  it('maps sandbox permission modes to the SDK sandboxMode option, and "bypass" to the closest achievable equivalent', async () => {
+    const handle = codexAdapter.start({ ...ctx, permissionMode: 'workspace-write' })
     handle.send('go', 't1')
-    handle.interrupt()
+    await flushMicrotasks()
+    expect((codexInstances[0].threads[0] as unknown as { __startOptions: { sandboxMode: string } }).__startOptions.sandboxMode).toBe(
+      'workspace-write'
+    )
 
-    expect(spawnCalls[0].proc.kill).toHaveBeenCalled()
+    codexInstances.length = 0
+    const handle2 = codexAdapter.start({ ...ctx, permissionMode: 'bypass' })
+    handle2.send('go', 't1')
+    await flushMicrotasks()
+    expect((codexInstances[0].threads[0] as unknown as { __startOptions: { sandboxMode: string } }).__startOptions.sandboxMode).toBe(
+      'danger-full-access'
+    )
   })
 
-  it('captures the real thread_id, round-tripping through getNativeSessionId()', () => {
-    const handle = codexAdapter.start(ctx)
-    expect(handle.getNativeSessionId()).toBeNull()
-    handle.send('hello', 't1')
-    emitLine(spawnCalls[0].proc, { type: 'thread.started', thread_id: 'thread-xyz' })
-    expect(handle.getNativeSessionId()).toBe('thread-xyz')
-  })
-
-  it('turn.started produces the Working signal (turn_started)', () => {
+  it('a same-session follow-up sent right after completion never gets a fabricated turn_exited (regression: real live run exposed this)', async () => {
     const handle = codexAdapter.start(ctx)
     const events: AgentEvent[] = []
     handle.onEvent((e) => events.push(e))
-    handle.send('hello', 't1')
+    handle.send('first turn', 't1')
+    await flushMicrotasks()
 
-    emitLine(spawnCalls[0].proc, { type: 'thread.started', thread_id: 't' })
-    emitLine(spawnCalls[0].proc, { type: 'turn.started' })
-    expect(events.filter((e) => e.type === 'turn_started')).toHaveLength(1)
+    const thread = codexInstances[0].threads[0]
+    thread.push({ type: 'turn.completed', usage: {} })
+    await flushMicrotasks()
+
+    // The user's follow-up is sent before the underlying process for turn
+    // 1 has actually finished exiting (end() not called yet) — exactly
+    // the ordering that produced a fabricated turn_exited for turn 2 on a
+    // real live run before this was fixed.
+    handle.send('second turn', 't2')
+    await flushMicrotasks()
+    expect(thread.runStreamedCalls).toHaveLength(1) // turn 2's own call is still queued
+
+    thread.end() // turn 1's process finally exits cleanly, late
+    await flushMicrotasks()
+    expect(thread.runStreamedCalls).toHaveLength(2) // now turn 2 has actually started
+
+    thread.push({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'second reply' } })
+    thread.push({ type: 'turn.completed', usage: {} })
+    await flushMicrotasks()
+
+    expect(events.filter((e) => e.type === 'turn_exited')).toEqual([])
+    expect(events).toContainEqual({ type: 'assistant_completed', sessionId: 's1', turnId: 't2', messageId: 'item_0', text: 'second reply' })
+    expect(events.filter((e) => e.type === 'turn_completed' && e.turnId === 't2')).toHaveLength(1)
   })
 
-  it('an agent_message item.completed produces exactly one assistant message, and turn.completed completes the right turn', () => {
+  it('resumes via resumeThread(id) when a persisted native session id is present', async () => {
+    const handle = codexAdapter.start({ ...ctx, nativeSessionId: 'prior-thread-id' })
+    handle.send('continue please', 't1')
+    await flushMicrotasks()
+
+    expect(codexInstances[0].threads[0].id).toBe('prior-thread-id')
+  })
+
+  it('maps a full turn (thread.started, command, agent_message, turn.completed) correctly', async () => {
     const handle = codexAdapter.start(ctx)
     const events: AgentEvent[] = []
     handle.onEvent((e) => events.push(e))
     handle.send('say pong', 't1')
+    await flushMicrotasks()
 
-    const proc = spawnCalls[0].proc
-    emitLine(proc, { type: 'thread.started', thread_id: 't' })
-    emitLine(proc, { type: 'turn.started' })
-    emitLine(proc, { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'pong' } })
-    emitLine(proc, { type: 'turn.completed', usage: {} })
-
-    expect(events).toContainEqual({ type: 'assistant_completed', sessionId: 's1', turnId: 't1', messageId: 'item_0', text: 'pong' })
-    expect(events).toContainEqual({ type: 'turn_completed', sessionId: 's1', turnId: 't1' })
-  })
-
-  it('turn.failed creates a failed state', () => {
-    const handle = codexAdapter.start(ctx)
-    const events: AgentEvent[] = []
-    handle.onEvent((e) => events.push(e))
-    handle.send('hello', 't1')
-
-    emitLine(spawnCalls[0].proc, { type: 'turn.failed', error: { message: 'boom' } })
-    expect(events).toContainEqual({ type: 'turn_failed', sessionId: 's1', turnId: 't1', reason: 'boom' })
-  })
-
-  it('process exit without any completion event synthesizes turn_failed, never a fabricated turn_completed', () => {
-    const handle = codexAdapter.start(ctx)
-    const events: AgentEvent[] = []
-    handle.onEvent((e) => events.push(e))
-    handle.send('hello', 't1')
-
-    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 1, signal: null })
-
-    expect(events.some((e) => e.type === 'turn_completed')).toBe(false)
-    expect(events).toContainEqual({
-      type: 'turn_failed',
-      sessionId: 's1',
-      turnId: 't1',
-      reason: 'Codex exited unexpectedly (code 1) without completing this turn.'
+    const thread = codexInstances[0].threads[0]
+    thread.push({ type: 'thread.started', thread_id: 'real-thread-id' })
+    thread.push({ type: 'turn.started' })
+    thread.push({
+      type: 'item.completed',
+      item: { id: 'item_0', type: 'agent_message', text: 'pong' }
     })
+    thread.push({ type: 'turn.completed', usage: {} })
+    await flushMicrotasks()
+
+    expect(events).toEqual([
+      { type: 'turn_started', sessionId: 's1', turnId: 't1' },
+      { type: 'assistant_completed', sessionId: 's1', turnId: 't1', messageId: 'item_0', text: 'pong' },
+      { type: 'turn_completed', sessionId: 's1', turnId: 't1' }
+    ])
+    expect(handle.getNativeSessionId()).toBe('real-thread-id')
   })
 
-  it('reports no fabricated models — an empty list since none are verified', () => {
+  it('interrupt() aborts the in-flight thread and emits turn_cancelled — not a fabricated error', async () => {
+    const handle = codexAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('count to 50', 't1')
+    await flushMicrotasks()
+
+    const thread = codexInstances[0].threads[0]
+    thread.push({ type: 'thread.started', thread_id: 'tid' })
+
+    handle.interrupt()
+    await flushMicrotasks()
+
+    expect(events).toContainEqual({ type: 'turn_cancelled', sessionId: 's1', turnId: 't1' })
+    expect(events.some((e) => e.type === 'turn_failed' || e.type === 'turn_exited')).toBe(false)
+  })
+
+  it('a genuine crash (no user-initiated stop/interrupt) emits turn_exited, not turn_cancelled', async () => {
+    const handle = codexAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('go', 't1')
+    await flushMicrotasks()
+
+    const thread = codexInstances[0].threads[0]
+    thread.fail(new Error('Codex Exec exited with code 1: some crash'))
+    await flushMicrotasks()
+
+    expect(events.some((e) => e.type === 'turn_cancelled')).toBe(false)
+    const exited = events.find((e) => e.type === 'turn_exited')
+    expect(exited).toBeDefined()
+    expect((exited as { reason: string }).reason).toContain('some crash')
+  })
+
+  it('a turn.failed event maps to turn_failed with the reported reason', async () => {
+    const handle = codexAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('go', 't1')
+    await flushMicrotasks()
+
+    const thread = codexInstances[0].threads[0]
+    thread.push({ type: 'turn.failed', error: { message: 'sandbox denied' } })
+    await flushMicrotasks()
+
+    expect(events).toContainEqual({ type: 'turn_failed', sessionId: 's1', turnId: 't1', reason: 'sandbox denied' })
+  })
+
+  it('stop() ends the thread so a later send() on the same handle starts a brand new one, reusing the same Codex client', async () => {
+    const handle = codexAdapter.start(ctx)
+    handle.send('go', 't1')
+    await flushMicrotasks()
+    handle.stop()
+    await flushMicrotasks()
+
+    handle.send('go again', 't2')
+    await flushMicrotasks()
+
+    expect(codexInstances).toHaveLength(1)
+    expect(codexInstances[0].threads).toHaveLength(2)
+  })
+
+  it('respondToInteraction is a documented no-op (codex exec has no live approval channel)', () => {
+    const handle = codexAdapter.start(ctx)
+    expect(() => handle.respondToInteraction('x', 'allow')).not.toThrow()
+  })
+
+  it('reports real capabilities (sandbox permission modes) and no fabricated model list', () => {
     const caps = codexAdapter.getCapabilities()
-    expect(caps.models).toEqual([])
+    expect(caps.agentId).toBe('codex')
     expect(caps.permissionModes.length).toBeGreaterThan(0)
+    expect(caps.models).toEqual([])
   })
 })

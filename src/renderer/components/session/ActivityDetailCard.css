@@ -1,0 +1,203 @@
+.ad-activity-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ad-activity-detail--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* Terminal-style command/output blocks — deliberately distinct from
+ * CodeBlock's source-code styling (no syntax highlighting, darker
+ * near-black background, evokes a real terminal rather than an editor). */
+.ad-terminal-block {
+  background: #0b0c0e;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.ad-terminal-block__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-2);
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--color-border);
+  user-select: none;
+}
+
+.ad-terminal-block__label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  flex: 1;
+}
+
+.ad-terminal-block__exit {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--color-success);
+}
+.ad-terminal-block__exit--error {
+  color: var(--color-danger);
+}
+
+.ad-terminal-block__body {
+  margin: 0;
+  padding: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: #d7dae0;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.ad-terminal-block__body--command {
+  color: #8fc98f;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* File change rows */
+.ad-file-change-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.ad-file-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.ad-file-badge--add {
+  color: var(--color-diff-add-text);
+  background: var(--color-diff-add-bg);
+}
+.ad-file-badge--delete {
+  color: var(--color-diff-del-text);
+  background: var(--color-diff-del-bg);
+}
+.ad-file-badge--update {
+  color: var(--color-accent);
+  background: var(--color-bg-selected);
+}
+
+.ad-file-change-row__path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+}
+
+.ad-file-change-row__action {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  color: var(--color-text-tertiary);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.ad-file-change-row__action:hover {
+  color: var(--color-accent);
+}
+
+/* MCP tool calls */
+.ad-activity-detail__mcp-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.ad-activity-detail__mcp-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-primary);
+  flex: 1;
+}
+.ad-activity-detail__mcp-toggle {
+  font-size: 11px;
+  color: var(--color-accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.ad-activity-detail__mcp-error {
+  font-size: 11.5px;
+  color: var(--color-danger);
+}
+
+/* Reasoning */
+.ad-activity-detail--reasoning {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+.ad-activity-detail__reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-tertiary);
+}
+
+/* Todo list */
+.ad-activity-detail__todos-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-tertiary);
+}
+.ad-todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ad-todo-list__item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+.ad-todo-list__item input {
+  margin-top: 0.2em;
+  accent-color: var(--color-accent);
+}
+.ad-todo-list__item--done span {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+}

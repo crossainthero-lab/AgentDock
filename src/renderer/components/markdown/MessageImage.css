@@ -1,0 +1,49 @@
+.ad-md-image {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  width: auto;
+  height: auto;
+  margin: var(--space-2) 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  object-fit: contain;
+  cursor: zoom-in;
+  transition: border-color var(--transition-fast);
+}
+
+.ad-md-image:hover {
+  border-color: var(--color-border-strong);
+}
+
+.ad-md-image-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-1) 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.ad-md-image-status--error {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+
+.ad-md-image-status__spinner {
+  animation: ad-spin 0.9s linear infinite;
+}
+
+@keyframes ad-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

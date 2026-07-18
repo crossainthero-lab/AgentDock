@@ -2,52 +2,64 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent } from '../../src/shared/events/agent-event'
 import type { AgentRunContext } from '../../src/main/agents/agent-adapter'
 
-interface MockProc {
-  pid: number
-  isRunning: boolean
-  kill: ReturnType<typeof vi.fn>
-  onLine: (cb: (line: string) => void) => () => void
-  onExit: (cb: (info: { exitCode: number | null; signal: number | null }) => void) => () => void
-  _lineListeners: Array<(line: string) => void>
-  _exitListeners: Array<(info: { exitCode: number | null; signal: number | null }) => void>
-}
+// A controllable stand-in for the SDK's `Query` (an AsyncGenerator plus
+// interrupt/setModel/setPermissionMode control methods). Tests push
+// SDKMessage-shaped objects into it and can end it (clean or via `fail`) to
+// simulate the process exiting.
+class MockQuery {
+  private readonly queue: unknown[] = []
+  private readonly waiting: Array<{ resolve: (r: IteratorResult<unknown>) => void; reject: (err: unknown) => void }> = []
+  private closed = false
+  private failure: Error | null = null
+  readonly interrupt = vi.fn(async () => ({ still_queued: [] }))
+  readonly setModel = vi.fn(async () => {})
+  readonly setPermissionMode = vi.fn(async () => {})
 
-const spawnCalls: Array<{ command: string; args: string[]; proc: MockProc }> = []
+  push(msg: unknown): void {
+    const waiter = this.waiting.shift()
+    if (waiter) waiter.resolve({ value: msg, done: false })
+    else this.queue.push(msg)
+  }
 
-function makeMockProc(): MockProc {
-  const proc: MockProc = {
-    pid: 1000 + spawnCalls.length,
-    isRunning: true,
-    kill: vi.fn(() => {
-      proc.isRunning = false
-    }),
-    _lineListeners: [],
-    _exitListeners: [],
-    onLine(cb) {
-      proc._lineListeners.push(cb)
-      return () => {}
-    },
-    onExit(cb) {
-      proc._exitListeners.push(cb)
-      return () => {}
+  /** Ends the generator cleanly (as if the CLI process exited normally). */
+  end(): void {
+    this.closed = true
+    while (this.waiting.length > 0) this.waiting.shift()?.resolve({ value: undefined, done: true })
+  }
+
+  /** Ends the generator by throwing (as if the SDK's read loop errored) —
+   *  rejects any already-pending `next()` call, not just future ones. */
+  fail(err: Error): void {
+    this.failure = err
+    this.closed = true
+    while (this.waiting.length > 0) this.waiting.shift()?.reject(err)
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<unknown> {
+    return {
+      next: (): Promise<IteratorResult<unknown>> => {
+        if (this.queue.length > 0) return Promise.resolve({ value: this.queue.shift(), done: false })
+        if (this.closed) return this.failure ? Promise.reject(this.failure) : Promise.resolve({ value: undefined, done: true })
+        return new Promise((resolve, reject) => this.waiting.push({ resolve, reject }))
+      }
     }
   }
-  return proc
 }
 
-function emitLine(proc: MockProc, obj: unknown): void {
-  for (const cb of proc._lineListeners) cb(JSON.stringify(obj))
+interface QueryCall {
+  prompt: AsyncIterable<unknown>
+  options: Record<string, unknown>
+  mock: MockQuery
 }
 
-vi.mock('../../src/main/services/child-process-service', () => ({
-  childProcessService: {
-    spawn: (command: string, args: string[]) => {
-      const proc = makeMockProc()
-      spawnCalls.push({ command, args, proc })
-      return proc
-    },
-    killAll: vi.fn()
-  }
+const queryCalls: QueryCall[] = []
+
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+  query: vi.fn((params: { prompt: AsyncIterable<unknown>; options: Record<string, unknown> }) => {
+    const mock = new MockQuery()
+    queryCalls.push({ prompt: params.prompt, options: params.options, mock })
+    return mock
+  })
 }))
 
 import { claudeAdapter } from '../../src/main/agents/claude/ClaudeAdapter'
@@ -60,70 +72,116 @@ const ctx: AgentRunContext = {
   executablePath: 'claude'
 }
 
+/** Drains the first pushed value out of an AsyncIterable without consuming
+ *  more than one item — used to assert what the transport wrote as the
+ *  initial user message. */
+async function firstValue<T>(iterable: AsyncIterable<T>): Promise<T> {
+  const it = iterable[Symbol.asyncIterator]()
+  const { value } = await it.next()
+  return value as T
+}
+
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 describe('claudeAdapter', () => {
   beforeEach(() => {
-    spawnCalls.length = 0
+    queryCalls.length = 0
   })
 
-  it('spawns a one-shot structured process with the prompt in argv, no --input-format', () => {
+  it('starts a query with the resolved executable, cwd, and no --input-format/-p leakage (SDK owns argv)', async () => {
     const handle = claudeAdapter.start(ctx)
     handle.send('do the thing', 't1')
+    await flushMicrotasks()
 
-    expect(spawnCalls).toHaveLength(1)
-    expect(spawnCalls[0].command).toBe('claude')
-    expect(spawnCalls[0].args).toEqual(['-p', 'do the thing', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'])
+    expect(queryCalls).toHaveLength(1)
+    expect(queryCalls[0].options.cwd).toBe('/tmp/project')
+    expect(queryCalls[0].options.pathToClaudeCodeExecutable).toBe('claude')
+    expect(queryCalls[0].options.includePartialMessages).toBe(true)
+    expect(typeof queryCalls[0].options.canUseTool).toBe('function')
   })
 
-  it('adds --resume with the persisted native session id, not a sentinel', () => {
-    const handle = claudeAdapter.start({ ...ctx, nativeSessionId: 'a-real-uuid-1234' })
-    handle.send('continue please', 't1')
+  it('delivers the prompt as a user message over the pushed input iterable, not a positional CLI arg', async () => {
+    const handle = claudeAdapter.start(ctx)
+    handle.send('do the thing', 't1')
+    await flushMicrotasks()
 
-    expect(spawnCalls[0].args).toContain('--resume')
-    expect(spawnCalls[0].args).toContain('a-real-uuid-1234')
+    const first = await firstValue(queryCalls[0].prompt)
+    expect(first).toEqual({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: 'do the thing' }] },
+      parent_tool_use_id: null
+    })
   })
 
-  it('adds --permission-mode when not default', () => {
-    const handle = claudeAdapter.start({ ...ctx, permissionMode: 'plan' })
-    handle.send('go', 't1')
-
-    expect(spawnCalls[0].args).toContain('--permission-mode')
-    expect(spawnCalls[0].args).toContain('plan')
-  })
-
-  it('spawns a fresh process every turn — never reuses a live process across turns', () => {
+  it('reuses the same live query for a second turn instead of spawning a new one', async () => {
     const handle = claudeAdapter.start(ctx)
     handle.send('first turn', 't1')
-    emitLine(spawnCalls[0].proc, { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 's' })
-    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 0, signal: null })
-
+    await flushMicrotasks()
     handle.send('second turn', 't2')
-    expect(spawnCalls).toHaveLength(2)
+    await flushMicrotasks()
+
+    expect(queryCalls).toHaveLength(1)
   })
 
-  it('interrupt() kills the in-flight process', () => {
-    const handle = claudeAdapter.start(ctx)
+  it('passes --resume equivalent (options.resume) with the persisted native session id', async () => {
+    const handle = claudeAdapter.start({ ...ctx, nativeSessionId: 'a-real-uuid-1234' })
+    handle.send('continue please', 't1')
+    await flushMicrotasks()
+
+    expect(queryCalls[0].options.resume).toBe('a-real-uuid-1234')
+  })
+
+  it('sets allowDangerouslySkipPermissions only for bypassPermissions mode', async () => {
+    const handle = claudeAdapter.start({ ...ctx, permissionMode: 'bypassPermissions' })
     handle.send('go', 't1')
-    handle.interrupt()
+    await flushMicrotasks()
 
-    expect(spawnCalls[0].proc.kill).toHaveBeenCalled()
+    expect(queryCalls[0].options.permissionMode).toBe('bypassPermissions')
+    expect(queryCalls[0].options.allowDangerouslySkipPermissions).toBe(true)
   })
 
-  it('maps a full turn (init, deltas, result) into turn_started, assistant_delta(s), turn_completed — no duplication', () => {
+  it('omits permissionMode entirely for the "default" sentinel', async () => {
+    const handle = claudeAdapter.start({ ...ctx, permissionMode: 'default' })
+    handle.send('go', 't1')
+    await flushMicrotasks()
+
+    expect(queryCalls[0].options.permissionMode).toBeUndefined()
+  })
+
+  it('captures model and effective permission mode from system/init', async () => {
+    const handle = claudeAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('hello', 't1')
+    await flushMicrotasks()
+
+    queryCalls[0].mock.push({ type: 'system', subtype: 'init', session_id: 'sid', model: 'claude-sonnet-5', permissionMode: 'acceptEdits' })
+    await flushMicrotasks()
+
+    expect(events).toContainEqual({ type: 'model_info', sessionId: 's1', turnId: 't1', model: 'claude-sonnet-5' })
+    expect(events).toContainEqual({ type: 'permission_mode_info', sessionId: 's1', turnId: 't1', permissionMode: 'acceptEdits' })
+    expect(handle.getNativeSessionId()).toBe('sid')
+  })
+
+  it('maps a full turn (init, deltas, result) into turn_started, assistant_delta(s), turn_completed', async () => {
     const handle = claudeAdapter.start(ctx)
     const events: AgentEvent[] = []
     handle.onEvent((e) => events.push(e))
     handle.send('say pong', 't1')
+    await flushMicrotasks()
 
-    const proc = spawnCalls[0].proc
-    emitLine(proc, { type: 'system', subtype: 'init', session_id: 'real-session-id' })
-    emitLine(proc, { type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } })
-    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } })
-    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'p' } } })
-    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ong' } } })
-    emitLine(proc, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'pong' }] } })
-    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
-    emitLine(proc, { type: 'stream_event', event: { type: 'message_stop' } })
-    emitLine(proc, { type: 'result', subtype: 'success', is_error: false, result: 'pong', session_id: 'real-session-id' })
+    const q = queryCalls[0].mock
+    q.push({ type: 'system', subtype: 'init', session_id: 'real-session-id' })
+    q.push({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } })
+    q.push({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } })
+    q.push({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'p' } } })
+    q.push({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ong' } } })
+    q.push({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
+    q.push({ type: 'stream_event', event: { type: 'message_stop' } })
+    q.push({ type: 'result', subtype: 'success', is_error: false, result: 'pong', session_id: 'real-session-id' })
+    await flushMicrotasks()
 
     expect(events).toEqual([
       { type: 'turn_started', sessionId: 's1', turnId: 't1' },
@@ -135,79 +193,223 @@ describe('claudeAdapter', () => {
     expect(handle.getNativeSessionId()).toBe('real-session-id')
   })
 
-  it('captures the real session_id, not a boolean sentinel', () => {
+  it('interrupt() calls Query.interrupt() and, once the subsequent error result arrives, emits turn_cancelled — not turn_failed', async () => {
     const handle = claudeAdapter.start(ctx)
-    expect(handle.getNativeSessionId()).toBeNull()
-    handle.send('hello', 't1')
-    emitLine(spawnCalls[0].proc, { type: 'system', subtype: 'init', session_id: 'abc-123' })
-    expect(handle.getNativeSessionId()).toBe('abc-123')
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('count to 50', 't1')
+    await flushMicrotasks()
+
+    handle.interrupt()
+    expect(queryCalls[0].mock.interrupt).toHaveBeenCalled()
+
+    // Confirmed live behavior: Query.interrupt() causes a subsequent
+    // `result` message with is_error:true (subtype 'error_during_execution')
+    // — the query itself stays alive for future turns.
+    queryCalls[0].mock.push({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['aborted'], session_id: 's' })
+    await flushMicrotasks()
+
+    expect(events).toContainEqual({ type: 'turn_cancelled', sessionId: 's1', turnId: 't1' })
+    expect(events.some((e) => e.type === 'turn_failed')).toBe(false)
   })
 
-  it('a well-behaved turn completes only via the structured result event, not process exit', () => {
+  it('stop() ends the query and emits turn_cancelled if no result had arrived yet', async () => {
     const handle = claudeAdapter.start(ctx)
     const events: AgentEvent[] = []
     handle.onEvent((e) => events.push(e))
     handle.send('hello', 't1')
+    await flushMicrotasks()
 
-    emitLine(spawnCalls[0].proc, { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 's' })
-    expect(events).toContainEqual({ type: 'turn_completed', sessionId: 's1', turnId: 't1', result: 'ok' })
+    handle.stop()
+    queryCalls[0].mock.end()
+    await flushMicrotasks()
 
-    // Process exit after a well-behaved result must not add a second/duplicate completion.
-    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 0, signal: null })
-    expect(events.filter((e) => e.type === 'turn_completed' || e.type === 'turn_failed')).toHaveLength(1)
+    expect(events).toContainEqual({ type: 'turn_cancelled', sessionId: 's1', turnId: 't1' })
   })
 
-  it('a non-success result maps to turn_failed', () => {
+  it('a genuine crash (no user-initiated stop/interrupt, generator throws) emits turn_exited, not turn_cancelled', async () => {
     const handle = claudeAdapter.start(ctx)
     const events: AgentEvent[] = []
     handle.onEvent((e) => events.push(e))
     handle.send('hello', 't1')
+    await flushMicrotasks()
 
-    emitLine(spawnCalls[0].proc, { type: 'result', subtype: 'error', is_error: true, result: 'Something broke', session_id: 's' })
+    queryCalls[0].mock.fail(new Error('process crashed'))
+    await flushMicrotasks()
+
+    expect(events.some((e) => e.type === 'turn_cancelled')).toBe(false)
+    const exited = events.find((e) => e.type === 'turn_exited')
+    expect(exited).toBeDefined()
+    expect((exited as { reason: string }).reason).toContain('process crashed')
+  })
+
+  it('a non-success result (not user-caused) maps to turn_failed', async () => {
+    const handle = claudeAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('hello', 't1')
+    await flushMicrotasks()
+
+    queryCalls[0].mock.push({ type: 'result', subtype: 'error', is_error: true, result: 'Something broke', session_id: 's' })
+    await flushMicrotasks()
+
     expect(events).toContainEqual({ type: 'turn_failed', sessionId: 's1', turnId: 't1', reason: 'Something broke' })
   })
 
-  it('process exit without any result event synthesizes turn_failed, never a fabricated turn_completed', () => {
+  describe('canUseTool permission bridge', () => {
+    it('an ordinary tool call raises a permission interaction; Allow resolves with behavior:allow and the original input', async () => {
+      const handle = claudeAdapter.start(ctx)
+      const events: AgentEvent[] = []
+      handle.onEvent((e) => events.push(e))
+      handle.send('run a command', 't1')
+      await flushMicrotasks()
+
+      const canUseTool = queryCalls[0].options.canUseTool as (
+        toolName: string,
+        input: Record<string, unknown>,
+        opts: { toolUseID: string; signal: AbortSignal; title?: string }
+      ) => Promise<unknown>
+
+      const signal = new AbortController().signal
+      const resultPromise = canUseTool('Bash', { command: 'ls' }, { toolUseID: 'tu1', signal, title: 'Claude wants to run `ls`.' })
+      await flushMicrotasks()
+
+      const interaction = events.find((e) => e.type === 'interaction_required')
+      expect(interaction).toBeDefined()
+      expect((interaction as { interaction: { kind: string; interactionId: string; prompt: string } }).interaction).toEqual({
+        kind: 'permission',
+        interactionId: 'tu1',
+        prompt: 'Claude wants to run `ls`.',
+        options: [
+          { id: 'allow', label: 'Allow' },
+          { id: 'deny', label: 'Deny' }
+        ]
+      })
+
+      handle.respondToInteraction('tu1', 'allow')
+      const result = await resultPromise
+      expect(result).toEqual({ behavior: 'allow', updatedInput: { command: 'ls' } })
+    })
+
+    it('Deny resolves with behavior:deny — this is the real decision returned to the SDK, not a simulated one', async () => {
+      const handle = claudeAdapter.start(ctx)
+      handle.send('run a command', 't1')
+      await flushMicrotasks()
+
+      const canUseTool = queryCalls[0].options.canUseTool as (
+        toolName: string,
+        input: Record<string, unknown>,
+        opts: { toolUseID: string; signal: AbortSignal }
+      ) => Promise<{ behavior: string; message?: string }>
+
+      const signal = new AbortController().signal
+      const resultPromise = canUseTool('Bash', { command: 'rm -rf /' }, { toolUseID: 'tu2', signal })
+      await flushMicrotasks()
+      handle.respondToInteraction('tu2', 'deny')
+
+      const result = await resultPromise
+      expect(result.behavior).toBe('deny')
+      expect(result.message).toBeTruthy()
+    })
+
+    it('a duplicate respondToInteraction call for an already-resolved id is a no-op (no throw, no second resolve)', async () => {
+      const handle = claudeAdapter.start(ctx)
+      handle.send('run a command', 't1')
+      await flushMicrotasks()
+
+      const canUseTool = queryCalls[0].options.canUseTool as (
+        toolName: string,
+        input: Record<string, unknown>,
+        opts: { toolUseID: string; signal: AbortSignal }
+      ) => Promise<unknown>
+      const signal = new AbortController().signal
+      const resultPromise = canUseTool('Bash', {}, { toolUseID: 'tu3', signal })
+      await flushMicrotasks()
+
+      handle.respondToInteraction('tu3', 'allow')
+      const result = await resultPromise
+      expect(() => handle.respondToInteraction('tu3', 'deny')).not.toThrow()
+      // Original decision is unchanged — a second call cannot flip it.
+      expect(result).toEqual({ behavior: 'allow', updatedInput: {} })
+    })
+
+    it('AskUserQuestion asks each question in sequence and delivers all answers via updatedInput.answers', async () => {
+      const handle = claudeAdapter.start(ctx)
+      const events: AgentEvent[] = []
+      handle.onEvent((e) => events.push(e))
+      handle.send('ask me something', 't1')
+      await flushMicrotasks()
+
+      const canUseTool = queryCalls[0].options.canUseTool as (
+        toolName: string,
+        input: Record<string, unknown>,
+        opts: { toolUseID: string; signal: AbortSignal }
+      ) => Promise<unknown>
+      const signal = new AbortController().signal
+
+      const input = {
+        questions: [
+          { question: 'Pick a color', header: 'Color', options: [{ label: 'Red', description: 'r' }, { label: 'Blue', description: 'b' }] },
+          { question: 'Pick a size', header: 'Size', options: [{ label: 'Small', description: 's' }, { label: 'Large', description: 'l' }] }
+        ]
+      }
+      const resultPromise = canUseTool('AskUserQuestion', input, { toolUseID: 'tu4', signal })
+      await flushMicrotasks()
+
+      const first = events.find((e) => e.type === 'interaction_required')
+      expect(first).toBeDefined()
+      expect((first as { interaction: { interactionId: string; prompt: string } }).interaction.interactionId).toBe('tu4:q0')
+      expect((first as { interaction: { prompt: string } }).interaction.prompt).toBe('Pick a color')
+
+      handle.respondToInteraction('tu4:q0', 'Red')
+      await flushMicrotasks()
+
+      const second = events.filter((e) => e.type === 'interaction_required')[1]
+      expect(second).toBeDefined()
+      expect((second as { interaction: { interactionId: string } }).interaction.interactionId).toBe('tu4:q1')
+
+      handle.respondToInteraction('tu4:q1', 'Large')
+      const result = await resultPromise
+
+      expect(result).toEqual({
+        behavior: 'allow',
+        updatedInput: { ...input, answers: { 'Pick a color': 'Red', 'Pick a size': 'Large' } }
+      })
+    })
+  })
+
+  it('setModel() applies live via Query.setModel() once a query exists', async () => {
     const handle = claudeAdapter.start(ctx)
-    const events: AgentEvent[] = []
-    handle.onEvent((e) => events.push(e))
     handle.send('hello', 't1')
+    await flushMicrotasks()
 
-    for (const cb of spawnCalls[0].proc._exitListeners) cb({ exitCode: 1, signal: null })
-
-    expect(events.some((e) => e.type === 'turn_completed')).toBe(false)
-    expect(events).toContainEqual({
-      type: 'turn_failed',
-      sessionId: 's1',
-      turnId: 't1',
-      reason: 'Claude exited unexpectedly (code 1) without completing this turn.'
-    })
+    handle.setModel('opus')
+    expect(queryCalls[0].mock.setModel).toHaveBeenCalledWith('opus')
   })
 
-  it('a tool_use content block never produces assistant text, only activity events', () => {
+  it('setModel() before any turn queues the model for the first spawn', async () => {
     const handle = claudeAdapter.start(ctx)
-    const events: AgentEvent[] = []
-    handle.onEvent((e) => events.push(e))
-    handle.send('run ls', 't1')
+    handle.setModel('haiku')
+    handle.send('hello', 't1')
+    await flushMicrotasks()
 
-    const proc = spawnCalls[0].proc
-    emitLine(proc, { type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } })
-    emitLine(proc, {
-      type: 'stream_event',
-      event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool_1', name: 'Bash', input: {} } }
-    })
-    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } } })
-    emitLine(proc, { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
-
-    expect(events).toEqual([
-      { type: 'activity_started', sessionId: 's1', turnId: 't1', activityId: 'tool_1', label: 'Bash', tool: 'Bash' },
-      { type: 'activity_completed', sessionId: 's1', turnId: 't1', activityId: 'tool_1', label: 'Bash', tool: 'Bash', status: 'done' }
-    ])
+    expect(queryCalls[0].options.model).toBe('haiku')
   })
 
-  it('reports real capabilities (permission modes) grounded in the CLI', () => {
+  it('setPermissionMode() applies live via Query.setPermissionMode()', async () => {
+    const handle = claudeAdapter.start(ctx)
+    handle.send('hello', 't1')
+    await flushMicrotasks()
+
+    handle.setPermissionMode?.('plan')
+    expect(queryCalls[0].mock.setPermissionMode).toHaveBeenCalledWith('plan')
+  })
+
+  it('reports real capabilities (permission modes) grounded in the SDK', () => {
     const caps = claudeAdapter.getCapabilities()
     expect(caps.agentId).toBe('claude-code')
     expect(caps.permissionModes.length).toBeGreaterThan(0)
+    expect(caps.supportsLiveModelSwitch).toBe(true)
+    expect(caps.supportsLivePermissionSwitch).toBe(true)
   })
 })

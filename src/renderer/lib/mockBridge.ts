@@ -118,6 +118,12 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       async getCapabilities(agentId) {
         return emptyCapabilities(agentId)
+      },
+      async browseExecutable() {
+        return null
+      },
+      async testExecutable(_agentId, path) {
+        return { path, type: 'unknown', ok: false, version: null, output: null, error: 'Not available in browser preview.' }
       }
     },
     session: {
@@ -154,6 +160,9 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       async respondToInteraction() {},
       async setModel() {},
       async runCommand() {},
+      async openExternalTerminal() {
+        return { launched: false, method: null, command: '', error: 'Not available in the browser preview.' }
+      },
       async interrupt() {},
       async stop(sessionId) {
         const session = sessions.get(sessionId)
@@ -185,6 +194,21 @@ if (typeof window !== 'undefined' && !window.agentDock) {
         return null
       },
       async revertFile() {}
+    },
+    media: {
+      async resolveImage() {
+        return { error: 'Not available in the browser preview.' }
+      },
+      async revealInFolder() {
+        return { ok: false, error: 'Not available in the browser preview.' }
+      },
+      async openLocalPath() {
+        return { ok: false, error: 'Not available in the browser preview.' }
+      },
+      async openExternalLink(url: string) {
+        window.open(url, '_blank', 'noopener,noreferrer')
+        return { ok: true }
+      }
     },
     approvals: {
       async respond() {},

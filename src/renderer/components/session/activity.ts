@@ -1,3 +1,5 @@
+import type { ActivityDetail } from '@shared/events/agent-event'
+
 export interface ActivityItem {
   id: string
   tool: string
@@ -5,6 +7,10 @@ export interface ActivityItem {
   detail: string | null
   isError: boolean
   status: 'running' | 'done'
+  /** Structured, tool-specific payload for a rich card (real command
+   *  output, changed file paths, ...) — see ActivityDetail. Absent for
+   *  agents/tools that only report a plain label. */
+  richDetail?: ActivityDetail
 }
 
 type Category = 'read' | 'write' | 'exec' | 'other'

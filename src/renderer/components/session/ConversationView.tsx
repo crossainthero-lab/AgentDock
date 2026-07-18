@@ -29,7 +29,7 @@ function buildTimeline(items: ChatItem[]): TimelineEntry[] {
 
   for (const item of items) {
     if (item.kind === 'tool-activity') {
-      group.push({ id: item.id, tool: item.tool, input: null, detail: item.detail, isError: item.isError, status: 'done' })
+      group.push({ id: item.id, tool: item.tool, input: null, detail: item.detail, isError: item.isError, status: 'done', richDetail: item.richDetail })
     } else {
       flush()
       timeline.push({ kind: 'item', item })
@@ -48,6 +48,9 @@ interface ConversationViewProps {
   onRespondInteraction: (interactionId: string, optionId: string) => void
   onRetryMessage: (userMessageId: string) => void
   onOpenTerminal: () => void
+  /** Needed to resolve local image/link paths in assistant Markdown — null
+   *  when there's no open workspace. */
+  workspaceId: string | null
 }
 
 export function ConversationView({
@@ -57,7 +60,8 @@ export function ConversationView({
   agentLabel,
   onRespondInteraction,
   onRetryMessage,
-  onOpenTerminal
+  onOpenTerminal,
+  workspaceId
 }: ConversationViewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const timeline = buildTimeline(items)
@@ -85,7 +89,7 @@ export function ConversationView({
       <div className="ad-conversation__inner">
         {timeline.map((entry, i) => {
           if (entry.kind === 'activity-group') {
-            return <ActivityGroup key={`group-${i}`} items={entry.items} />
+            return <ActivityGroup key={`group-${i}`} items={entry.items} workspaceId={workspaceId} />
           }
           const { item } = entry
           if (item.kind === 'user') {
@@ -100,7 +104,7 @@ export function ConversationView({
             )
           }
           if (item.kind === 'assistant') {
-            return <MessageBubble key={item.id} role="assistant" text={item.text} />
+            return <MessageBubble key={item.id} role="assistant" text={item.text} workspaceId={workspaceId} />
           }
           if (item.kind === 'system') {
             return <MessageBubble key={item.id} role={item.role} text={item.text} />

@@ -16,6 +16,7 @@
   align-self: flex-start;
   color: var(--color-text-primary);
   padding: 2px 0;
+  width: 100%;
 }
 
 .ad-message--error {
@@ -32,8 +33,31 @@
 }
 
 .ad-message__text {
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+.ad-message__text--plain {
+  white-space: pre-wrap;
+}
+
+/* The copy-whole-response toolbar sits below the message, only on hover —
+ * never overlapping the message text itself, so selecting prose can never
+ * accidentally grab a button. */
+.ad-message--group {
+  position: relative;
+}
+
+.ad-message__toolbar {
+  display: flex;
+  margin-top: 2px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  user-select: none;
+}
+
+.ad-message--group:hover .ad-message__toolbar,
+.ad-message__toolbar:focus-within {
+  opacity: 1;
 }
 
 .ad-message__delivery {
@@ -55,14 +79,4 @@
   font-weight: 600;
   text-decoration: underline;
   cursor: pointer;
-}
-
-.ad-message__code {
-  margin: 6px 0;
-  padding: var(--space-3);
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  font-size: 12px;
-  overflow-x: auto;
 }
