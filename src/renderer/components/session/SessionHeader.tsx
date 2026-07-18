@@ -1,6 +1,6 @@
 import type React from 'react'
 import { useState } from 'react'
-import { FileDiff, ListTree, MoreHorizontal, Square, Terminal, TerminalSquare, UserPlus } from 'lucide-react'
+import { FileDiff, ListTree, MoreHorizontal, RefreshCw, Square, Terminal, TerminalSquare, UserPlus } from 'lucide-react'
 import { AGENT_DISPLAY_NAMES } from '@shared/types'
 import type { AgentCapabilities, AgentModelOption, Session, SessionStatus } from '@shared/types'
 import { StatusDot } from '../ui/StatusDot'
@@ -16,6 +16,10 @@ interface SessionHeaderProps {
   /** The real model in use, reported by the transport itself (Claude's
    *  system/init) — null until known. Never guessed/hardcoded. */
   currentModel: string | null
+  /** The real reasoning effort in use for the current model (Codex only —
+   *  each model has its own supportedReasoningEfforts list, so this is a
+   *  separate control from currentModel, not a mode of it). */
+  currentReasoningEffort: string | null
   /** The real, effective permission mode reported the same way — may
    *  differ from `currentPermissionMode` (what AgentDock requested) if the
    *  CLI applied a policy override. Preferred for display when present. */
@@ -29,8 +33,13 @@ interface SessionHeaderProps {
   onStop: () => void
   onInterrupt: () => void
   onSetModel: (modelId: string) => void
+  onSetReasoningEffort: (effortId: string) => void
   onSetPermissionMode: (modeId: string) => void
   onRunCommand: (commandId: string) => void
+  /** Codex only — re-fetches the live model catalogue from Codex's
+   *  app-server (`model/list`), replacing whatever's currently shown. */
+  onRefreshModelCatalog?: () => void
+  refreshingModelCatalog?: boolean
   /** Only offered for Claude sessions — see NewSessionView/SessionView. */
   onOpenExternalTerminal?: () => void
   /** Opens the trace-only diagnostics view (Testing Mode) — offered for
@@ -78,12 +87,48 @@ function claudeModelDisplay(
   return turnLikelyActive ? { label: 'Detecting model…', selectedId: null } : { label: 'Claude — Unknown model', selectedId: null }
 }
 
+/** Resolves the Model menu's trigger text for a Codex session. Unlike
+ *  Claude, Codex's JSON stream never echoes the active model back — what
+ *  AgentDock knows is exactly what it told Codex to use (see CodexAdapter's
+ *  model_info emission), so this only ever shows a real selected model or
+ *  the generic placeholder — never a guess at what Codex's own config
+ *  default might be on this machine. */
+function codexModelDisplay(currentModel: string | null, models: AgentModelOption[]): { label: string; selectedId: string | null } {
+  if (!currentModel) return { label: 'Model', selectedId: null }
+  const match = models.find((m) => m.id === currentModel)
+  return { label: match?.label ?? currentModel, selectedId: match?.id ?? currentModel }
+}
+
+function capitalize(id: string): string {
+  return id.charAt(0).toUpperCase() + id.slice(1)
+}
+
+/** Resolves the reasoning-effort control's trigger text — a real selected
+ *  effort, the selected model's own default effort (labeled as such,
+ *  never presented as if the user picked it), or the generic placeholder
+ *  when no model is selected yet at all. */
+function reasoningEffortDisplay(
+  currentReasoningEffort: string | null,
+  selectedModel: AgentModelOption | undefined
+): { label: string; selectedId: string | null } {
+  if (!selectedModel) return { label: 'Effort', selectedId: null }
+  if (currentReasoningEffort) {
+    const match = selectedModel.supportedReasoningEfforts?.find((e) => e.id === currentReasoningEffort)
+    return { label: match?.label ?? capitalize(currentReasoningEffort), selectedId: currentReasoningEffort }
+  }
+  if (selectedModel.defaultReasoningEffort) {
+    return { label: `${capitalize(selectedModel.defaultReasoningEffort)} (default)`, selectedId: selectedModel.defaultReasoningEffort }
+  }
+  return { label: 'Effort', selectedId: null }
+}
+
 export function SessionHeader({
   session,
   changedFileCount,
   capabilities,
   currentPermissionMode,
   currentModel,
+  currentReasoningEffort,
   effectivePermissionMode,
   showTerminal,
   onOpenChanges,
@@ -92,19 +137,39 @@ export function SessionHeader({
   onStop,
   onInterrupt,
   onSetModel,
+  onSetReasoningEffort,
   onSetPermissionMode,
   onRunCommand,
+  onRefreshModelCatalog,
+  refreshingModelCatalog,
   onOpenExternalTerminal,
   onOpenDiagnostics
 }: SessionHeaderProps): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [showLegacyModels, setShowLegacyModels] = useState(false)
   const isClaude = session.agentId === 'claude-code'
+  const isCodex = session.agentId === 'codex'
   const modelDisplay = isClaude
     ? claudeModelDisplay(currentModel, capabilities?.models ?? [], session.status)
-    : { label: 'Model', selectedId: null }
+    : isCodex
+      ? codexModelDisplay(currentModel, capabilities?.models ?? [])
+      : { label: 'Model', selectedId: null }
   const displayedPermissionMode = effectivePermissionMode ?? currentPermissionMode
   const permissionModeOption = capabilities?.permissionModes.find((m) => m.id === displayedPermissionMode)
   const isBusy = session.status === 'running' || session.status === 'waiting_for_permission' || session.status === 'waiting_for_user'
+
+  // Codex's live catalogue mixes visible and legacy/hidden models together
+  // (see codex-model-catalog-service.ts) — split them so legacy ones are
+  // opt-in and clearly marked, never mixed in silently.
+  const allCodexModels = capabilities?.models ?? []
+  const visibleCodexModels = isCodex ? allCodexModels.filter((m) => !m.hidden) : allCodexModels
+  const legacyCodexModels = isCodex ? allCodexModels.filter((m) => m.hidden) : []
+  const codexModelMenuItems = showLegacyModels
+    ? [...visibleCodexModels, ...legacyCodexModels.map((m) => ({ ...m, label: `Legacy: ${m.label}`, description: `${m.description ?? ''} (legacy)`.trim() }))]
+    : visibleCodexModels
+
+  const selectedCodexModel = isCodex ? allCodexModels.find((m) => m.id === modelDisplay.selectedId) : undefined
+  const effortDisplay = reasoningEffortDisplay(currentReasoningEffort, selectedCodexModel)
 
   return (
     <div className="ad-session-header">
@@ -123,12 +188,35 @@ export function SessionHeader({
          *  item list is empty). */}
         <Menu
           label="Model"
-          items={capabilities?.models ?? []}
+          items={isCodex ? codexModelMenuItems : (capabilities?.models ?? [])}
           selectedId={modelDisplay.selectedId}
-          selectedLabel={isClaude ? modelDisplay.label : undefined}
+          selectedLabel={isClaude || isCodex ? modelDisplay.label : undefined}
           onSelect={onSetModel}
           disabled={!capabilities?.supportsLiveModelSwitch}
         />
+        {isCodex && (
+          <Menu
+            label="Effort"
+            items={selectedCodexModel?.supportedReasoningEfforts ?? []}
+            selectedId={effortDisplay.selectedId}
+            selectedLabel={`Effort: ${effortDisplay.label}`}
+            onSelect={onSetReasoningEffort}
+          />
+        )}
+        {isCodex && legacyCodexModels.length > 0 && (
+          <button
+            className="ad-session-header__legacy-toggle"
+            onClick={() => setShowLegacyModels((v) => !v)}
+            title={showLegacyModels ? 'Hide legacy Codex models' : `Show ${legacyCodexModels.length} legacy Codex model(s)`}
+          >
+            {showLegacyModels ? 'Hide legacy' : 'Show legacy'}
+          </button>
+        )}
+        {isCodex && onRefreshModelCatalog && (
+          <IconButton label="Refresh Codex model list" size="sm" onClick={onRefreshModelCatalog} disabled={refreshingModelCatalog}>
+            <RefreshCw size={13} className={refreshingModelCatalog ? 'ad-session-header__refresh-spin' : undefined} />
+          </IconButton>
+        )}
         <Menu
           label="Permissions"
           items={capabilities?.permissionModes ?? []}

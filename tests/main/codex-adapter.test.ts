@@ -117,7 +117,9 @@ const ctx: AgentRunContext = {
   workspacePath: '/tmp/project',
   nativeSessionId: null,
   permissionMode: 'default',
-  executablePath: 'codex'
+  executablePath: 'codex',
+  model: null,
+  reasoningEffort: null
 }
 
 function flushMicrotasks(): Promise<void> {
@@ -321,10 +323,44 @@ describe('codexAdapter', () => {
     expect(() => handle.respondToInteraction('x', 'allow')).not.toThrow()
   })
 
-  it('reports real capabilities (sandbox permission modes) and no fabricated model list', () => {
+  it('reports real capabilities (sandbox permission modes) and no static/hardcoded model list — the real list comes from the live catalogue (codex-model-catalog-service.ts), never a fixed static array', () => {
     const caps = codexAdapter.getCapabilities()
     expect(caps.agentId).toBe('codex')
     expect(caps.permissionModes.length).toBeGreaterThan(0)
     expect(caps.models).toEqual([])
+    expect(caps.supportsLiveModelSwitch).toBe(true)
+  })
+
+  it('passes ctx.model through to the SDK ThreadOptions and reports it via model_info at turn start', async () => {
+    const handle = codexAdapter.start({ ...ctx, model: 'gpt-5.6-sol' })
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('go', 't1')
+    await flushMicrotasks()
+
+    expect((codexInstances[0].threads[0] as unknown as { __startOptions: { model?: string } }).__startOptions.model).toBe('gpt-5.6-sol')
+    expect(events).toContainEqual({ type: 'model_info', sessionId: 's1', turnId: 't1', model: 'gpt-5.6-sol' })
+  })
+
+  it('emits no model_info when no model override is configured (never invents a model name)', async () => {
+    const handle = codexAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('go', 't1')
+    await flushMicrotasks()
+
+    expect(events.some((e) => e.type === 'model_info')).toBe(false)
+  })
+
+  it('setModel() updates the model used by the next turn on this handle', async () => {
+    const handle = codexAdapter.start(ctx)
+    handle.setModel('gpt-5.6-sol')
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('go', 't1')
+    await flushMicrotasks()
+
+    expect((codexInstances[0].threads[0] as unknown as { __startOptions: { model?: string } }).__startOptions.model).toBe('gpt-5.6-sol')
+    expect(events).toContainEqual({ type: 'model_info', sessionId: 's1', turnId: 't1', model: 'gpt-5.6-sol' })
   })
 })

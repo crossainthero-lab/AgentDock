@@ -40,6 +40,13 @@ const pendingInteractions = new Map<string, PendingInteraction>()
  *  the renderer store detect a duplicate/out-of-order redelivery. Assigned
  *  here, once, at the single point every event is broadcast from. */
 const sequenceCounters = new Map<string, number>()
+/** The last Codex model id that genuinely completed a turn successfully —
+ *  used to revert Settings → Agents' saved model choice if the user picks
+ *  one Codex ends up rejecting (see the turn_failed case below), so a bad
+ *  selection doesn't stick for future turns/sessions. In-memory only
+ *  (resets on app restart); the persisted setting itself is the durable
+ *  source of truth once a model is confirmed working. */
+let lastGoodCodexModel: string | null = null
 
 function broadcastEvent(sessionId: string, event: AgentEvent): void {
   trace(sessionId, { kind: 'TRANSLATED_EVENT_EMITTED', detail: event.type })
@@ -114,7 +121,9 @@ export const sessionService = {
         workspacePath: workspacePathFor(session.workspaceId),
         nativeSessionId: sessionRepo.getNativeSessionId(sessionId),
         permissionMode: agentSettings.permissionMode,
-        executablePath: detection.executablePath
+        executablePath: detection.executablePath,
+        model: agentSettings.model,
+        reasoningEffort: agentSettings.reasoningEffort
       })
 
       const runState: RunningSession = { handle, unsubscribe: () => {}, hadError: false }
@@ -166,6 +175,24 @@ export const sessionService = {
             if (event.type === 'turn_failed') {
               runState.hadError = true
               messageRepo.add(sessionId, 'error', { kind: 'text', text: event.reason })
+              // Codex names the rejected model directly in its own error
+              // text (confirmed live: "The 'X' model is not supported when
+              // using Codex with a ChatGPT account.") — if that's what just
+              // failed, don't leave a known-broken model selected for the
+              // next turn/session; fall back to the last model that
+              // genuinely worked and let the header reflect it immediately.
+              if (
+                session.agentId === 'codex' &&
+                agentSettings.model &&
+                lastGoodCodexModel &&
+                lastGoodCodexModel !== agentSettings.model &&
+                event.reason.toLowerCase().includes(agentSettings.model.toLowerCase())
+              ) {
+                settingsService.update({ agents: { codex: { model: lastGoodCodexModel } } })
+                broadcastEvent(sessionId, { type: 'model_info', sessionId, turnId: event.turnId, model: lastGoodCodexModel })
+              }
+            } else if (session.agentId === 'codex' && agentSettings.model) {
+              lastGoodCodexModel = agentSettings.model
             }
             sessionRepo.setStatus(sessionId, event.type === 'turn_failed' || runState.hadError ? 'error' : 'idle')
             running.delete(sessionId)

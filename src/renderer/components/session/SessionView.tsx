@@ -4,7 +4,7 @@ import { useAppState } from '../../state/AppStateContext'
 import { useSessionConversation } from '../../state/useSessionConversation'
 import { getAgentDock } from '../../lib/agentDockClient'
 import { AGENT_DISPLAY_NAMES } from '@shared/types'
-import type { AgentCapabilities, Session } from '@shared/types'
+import type { AgentCapabilities, AgentModelOption, Session } from '@shared/types'
 import { SessionHeader } from './SessionHeader'
 import { ConversationView } from './ConversationView'
 import { PromptComposer } from './PromptComposer'
@@ -22,6 +22,13 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
   const [changedCount, setChangedCount] = useState(0)
   const [actionError, setActionError] = useState<string | null>(null)
   const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(null)
+  // Codex's model list isn't part of the static capability declaration —
+  // it's fetched live from Codex's own account-scoped catalogue (see
+  // codex-model-catalog-service.ts) and merged into `capabilities.models`
+  // at render time below, kept separate here so a slow/failed catalogue
+  // fetch never blocks or clobbers the rest of capabilities.
+  const [codexModels, setCodexModels] = useState<AgentModelOption[]>([])
+  const [codexCatalogRefreshing, setCodexCatalogRefreshing] = useState(false)
 
   useEffect(() => {
     setChangesOpen(false)
@@ -63,6 +70,35 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
     }
   }, [conversation.session?.agentId])
 
+  // Fast, non-blocking load of whatever's cached — never spawns a process.
+  // A real live fetch also happens once at app startup (main/index.ts) and
+  // whenever the user presses the header's refresh button below, per "when
+  // AgentDock starts... and when the user presses a refresh button."
+  useEffect(() => {
+    if (conversation.session?.agentId !== 'codex') return
+    let cancelled = false
+    void getAgentDock()
+      .codex.getModelCatalog()
+      .then((result) => {
+        if (!cancelled) setCodexModels(result.models)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [conversation.session?.agentId])
+
+  function refreshCodexModelCatalog(): void {
+    setCodexCatalogRefreshing(true)
+    getAgentDock()
+      .codex.refreshModelCatalog()
+      .then((result) => {
+        setCodexModels(result.models)
+        if (result.error && result.source !== 'live') reportActionError('Refresh model list', new Error(result.error))
+      })
+      .catch((err) => reportActionError('Refresh model list', err))
+      .finally(() => setCodexCatalogRefreshing(false))
+  }
+
   if (!workspace || !conversation.session) return null
 
   const session: Session = conversation.session
@@ -89,15 +125,23 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
       .catch((err) => reportActionError('Open terminal', err))
   }
 
+  // Codex's live catalogue is fetched separately from the static
+  // capability declaration (see the effects above) — merged in here at
+  // render time rather than into `capabilities` state directly, so a
+  // slow/failed catalogue fetch can never clobber permissionModes/commands.
+  const effectiveCapabilities: AgentCapabilities | null =
+    session.agentId === 'codex' && capabilities ? { ...capabilities, models: codexModels } : capabilities
+
   return (
     <div className="ad-session-view">
       <div className="ad-session-view__main">
         <SessionHeader
           session={session}
           changedFileCount={changedCount}
-          capabilities={capabilities}
+          capabilities={effectiveCapabilities}
           currentPermissionMode={settings?.agents[session.agentId]?.permissionMode ?? 'default'}
           currentModel={conversation.currentModel}
+          currentReasoningEffort={conversation.currentReasoningEffort}
           effectivePermissionMode={conversation.effectivePermissionMode}
           showTerminal={showTerminal}
           onOpenChanges={() => {
@@ -113,8 +157,26 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
             conversation.interrupt().catch((err) => reportActionError('Interrupt', err))
           }}
           onSetModel={(modelId) => {
+            // Codex spawns a brand-new process/thread every turn (see
+            // session-service.sendPrompt) rather than keeping one live the
+            // way Claude does, so there's no in-flight query to redirect —
+            // persisting the choice (same mechanism as permission mode
+            // just above) is what makes it apply to the next turn and to
+            // future sessions.
+            if (session.agentId === 'codex') {
+              void updateSettings({ agents: { codex: { model: modelId } } })
+              return
+            }
             conversation.setModel(modelId).catch((err) => reportActionError('Set model', err))
           }}
+          onSetReasoningEffort={(effortId) => {
+            // Same persistence-based mechanism as onSetModel above — Codex
+            // is the only agent this applies to today (Menu renders
+            // nothing for agents with no supportedReasoningEfforts data).
+            void updateSettings({ agents: { codex: { reasoningEffort: effortId } } })
+          }}
+          onRefreshModelCatalog={session.agentId === 'codex' ? refreshCodexModelCatalog : undefined}
+          refreshingModelCatalog={codexCatalogRefreshing}
           onSetPermissionMode={(modeId) => {
             void updateSettings({ agents: { [session.agentId]: { permissionMode: modeId } } })
           }}

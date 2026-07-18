@@ -36,6 +36,22 @@ export interface CodexAgentSdkTransportOptions {
    *  'workspace-write' | 'danger-full-access' | 'bypass'). */
   permissionMode: string
   nativeThreadId: string | null
+  /** One of the live model catalogue's ids (see
+   *  codex-model-catalog-service.ts), or null/undefined to let Codex use
+   *  its own configured default (~/.codex/config.toml) — never guessed. */
+  model?: string | null
+  /** One of the selected model's own supportedReasoningEfforts ids from
+   *  the same live catalogue — e.g. "ultra" — or null/undefined to let
+   *  Codex use that model's own defaultReasoningEffort. Deliberately typed
+   *  as a plain string, not the SDK's own `ModelReasoningEffort` union
+   *  ("minimal"|"low"|"medium"|"high"|"xhigh"): that union is stale
+   *  relative to the real catalogue, which already returns values like
+   *  "max" and "ultra" it doesn't know about. Confirmed safe by reading
+   *  the SDK's compiled source — it forwards this value verbatim into
+   *  `--config model_reasoning_effort="<value>"` with no runtime
+   *  validation against the union, and a real turn with "ultra" was
+   *  confirmed to run successfully. */
+  modelReasoningEffort?: string | null
 }
 
 export interface TransportExitInfo {
@@ -134,7 +150,11 @@ export class CodexAgentSdkTransport {
           // the CLI's own documented behavior) instead of risking the
           // process waiting on an approval that can never arrive.
           approvalPolicy: 'never',
-          sandboxMode: SANDBOX_MODE_MAP[this.opts.permissionMode]
+          sandboxMode: SANDBOX_MODE_MAP[this.opts.permissionMode],
+          model: this.opts.model ?? undefined,
+          // Cast past the SDK's stale narrow union — see this field's doc
+          // comment in CodexAgentSdkTransportOptions above.
+          modelReasoningEffort: (this.opts.modelReasoningEffort ?? undefined) as ThreadOptions['modelReasoningEffort']
         }
         this.thread = this.opts.nativeThreadId
           ? this.codex.resumeThread(this.opts.nativeThreadId, threadOptions)
@@ -168,5 +188,36 @@ export class CodexAgentSdkTransport {
   stop(): void {
     this.abortController?.abort()
     this.thread = null
+  }
+
+  /** Changes the model for the next turn without losing conversation
+   *  history. There's no per-turn model override in the SDK (ThreadOptions
+   *  is only read when a Thread is created) — but discarding the cached
+   *  Thread wrapper and letting the next launch() recreate it via
+   *  resumeThread(realThreadId, {model}) is confirmed equivalent to `codex
+   *  exec resume <id> -m <model>`, which genuinely continues the same
+   *  thread under the new model (the CLI only warns that the session was
+   *  recorded under a different model — it doesn't restart or drop
+   *  history). A no-op while a turn is actively running; the new model
+   *  takes effect starting the next start() call. */
+  setModel(model: string | null): void {
+    if (this.opts.model === model) return
+    this.opts.model = model
+    this.discardCachedThreadForNextTurn()
+  }
+
+  /** Same mechanism as setModel() — a separate control, but the same
+   *  "Thread only reads options at creation" constraint applies. */
+  setReasoningEffort(reasoningEffort: string | null): void {
+    if (this.opts.modelReasoningEffort === reasoningEffort) return
+    this.opts.modelReasoningEffort = reasoningEffort
+    this.discardCachedThreadForNextTurn()
+  }
+
+  private discardCachedThreadForNextTurn(): void {
+    if (this.thread && !this.running) {
+      if (this.thread.id) this.opts.nativeThreadId = this.thread.id
+      this.thread = null
+    }
   }
 }

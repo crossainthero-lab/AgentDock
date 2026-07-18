@@ -69,7 +69,9 @@ const ctx: AgentRunContext = {
   workspacePath: '/tmp/project',
   nativeSessionId: null,
   permissionMode: 'default',
-  executablePath: 'claude'
+  executablePath: 'claude',
+  model: null,
+  reasoningEffort: null
 }
 
 /** Drains the first pushed value out of an AsyncIterable without consuming

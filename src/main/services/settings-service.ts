@@ -7,7 +7,7 @@ import { getDatabasePath } from '../db/database'
 function defaultSettings(): Settings {
   const agents = {} as Settings['agents']
   for (const id of AGENT_IDS) {
-    agents[id] = { customPath: null, permissionMode: 'default' }
+    agents[id] = { customPath: null, permissionMode: 'default', model: null, reasoningEffort: null }
   }
   return {
     appearance: 'system',

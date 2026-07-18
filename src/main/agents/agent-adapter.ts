@@ -10,6 +10,16 @@ export interface AgentRunContext {
   /** From Settings → Agents — one of this agent's own AgentCapabilities.permissionModes ids. */
   permissionMode: string
   executablePath: string
+  /** From Settings → Agents — one of this agent's own AgentCapabilities.models
+   *  ids, or null to use the agent's own configured default. Read fresh at
+   *  handle-construction time (see session-service.sendPrompt), which is
+   *  what makes a model choice apply to the next turn for agents that spawn
+   *  a brand-new process/thread every turn rather than keeping one alive. */
+  model: string | null
+  /** From Settings → Agents — one of the selected model's own
+   *  supportedReasoningEfforts ids (Codex only today), or null to use that
+   *  model's own defaultReasoningEffort. A separate control from `model`. */
+  reasoningEffort: string | null
 }
 
 export interface AgentRunHandle {

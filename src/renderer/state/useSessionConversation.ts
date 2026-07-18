@@ -32,6 +32,9 @@ export interface SessionConversationState {
   /** The real model in use, reported by the transport itself — null until
    *  known. Never guessed/hardcoded. */
   currentModel: string | null
+  /** The real reasoning effort in use for the current model (Codex only
+   *  today), reported the same way. */
+  currentReasoningEffort: string | null
   /** The real, effective permission mode reported the same way. */
   effectivePermissionMode: string | null
 }
@@ -71,6 +74,7 @@ function toPublicState(
     loading,
     traces,
     currentModel: reducer.currentModel,
+    currentReasoningEffort: reducer.currentReasoningEffort,
     effectivePermissionMode: reducer.currentPermissionMode
   }
 }

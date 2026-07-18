@@ -80,7 +80,7 @@ export type AgentEvent =
   | (AgentEventBase & { type: 'turn_exited'; reason: string })
   // The real model in use for this session, as reported by the Claude Agent
   // SDK's system/init message — never guessed or hardcoded.
-  | (AgentEventBase & { type: 'model_info'; model: string })
+  | (AgentEventBase & { type: 'model_info'; model: string; reasoningEffort?: string })
   // The real, effective permission mode reported by the same system/init
   // message (may differ from what AgentDock requested, e.g. a policy override).
   | (AgentEventBase & { type: 'permission_mode_info'; permissionMode: string })

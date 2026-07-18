@@ -5,6 +5,7 @@ import type {
   ApprovalDecision,
   ApprovalRequest,
   ChangedFile,
+  CodexModelCatalogResult,
   CreateSessionInput,
   Diagnostics,
   DiffResult,
@@ -55,6 +56,16 @@ export interface AgentDockApi {
      *  button, independent of whatever is currently saved as the custom
      *  path or auto-detected. */
     testExecutable(agentId: AgentId, path: string): Promise<ExecutableTestResult>
+  }
+  codex: {
+    /** Fast, non-blocking — returns the cached catalogue (or a
+     *  currently-configured-model fallback) without spawning anything.
+     *  Safe to call on every render. */
+    getModelCatalog(): Promise<CodexModelCatalogResult>
+    /** Does a real live fetch against Codex's app-server `model/list` and
+     *  updates the cache — used at app start, on the Settings "Refresh"
+     *  action, and the Model menu's own refresh button. */
+    refreshModelCatalog(): Promise<CodexModelCatalogResult>
   }
   session: {
     create(input: CreateSessionInput): Promise<Session>

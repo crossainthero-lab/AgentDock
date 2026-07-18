@@ -33,10 +33,17 @@ class CodexRunHandle implements AgentRunHandle {
    *  from a genuine crash (turn_exited). */
   private userCausedExit = false
   private currentTurnId = ''
+  /** Starts out as whatever Settings → Agents had saved (ctx.model);
+   *  setModel() can change it thereafter for this handle's lifetime. */
+  private currentModel: string | null
+  private currentReasoningEffort: string | null
   private readonly eventListeners = new Set<(event: AgentEvent) => void>()
   private readonly exitListeners = new Set<(info: ProcessExitInfo) => void>()
 
-  constructor(private readonly ctx: AgentRunContext) {}
+  constructor(private readonly ctx: AgentRunContext) {
+    this.currentModel = ctx.model
+    this.currentReasoningEffort = ctx.reasoningEffort
+  }
 
   get isRunning(): boolean {
     return this.transport?.isRunning ?? false
@@ -52,11 +59,27 @@ class CodexRunHandle implements AgentRunHandle {
         cwd: this.ctx.workspacePath,
         executablePath: this.ctx.executablePath,
         permissionMode: this.ctx.permissionMode,
-        nativeThreadId: this.ctx.nativeSessionId
+        nativeThreadId: this.ctx.nativeSessionId,
+        model: this.currentModel,
+        modelReasoningEffort: this.currentReasoningEffort
       })
       this.transport = transport
 
       transport.onMessage((msg) => this.handleMessage(msg))
+    }
+
+    // Reported up front rather than waiting to see it echoed back from the
+    // CLI (Codex's JSON stream never echoes the model back the way
+    // Claude's system/init does) — this is exactly what the transport is
+    // about to be told to use, not a guess.
+    if (this.currentModel) {
+      this.emit({
+        type: 'model_info',
+        sessionId: this.ctx.session.id,
+        turnId,
+        model: this.currentModel,
+        reasoningEffort: this.currentReasoningEffort ?? undefined
+      })
     }
 
     // start() resolves this specific turn's own result (never a shared
@@ -133,10 +156,15 @@ class CodexRunHandle implements AgentRunHandle {
     )
   }
 
-  setModel(): void {
-    // Not supported — capabilities.models is empty so the UI never offers
-    // this; guard here anyway rather than silently misbehaving.
-    console.warn('[codex] setModel() called but Codex has no verified model list for `codex exec`')
+  setModel(modelId: string): void {
+    this.currentModel = modelId
+    // Usually a no-op here in practice: session-service constructs a
+    // brand-new handle per turn (see sendPrompt), so the common path is
+    // "no transport exists yet" and this just primes currentModel for the
+    // send() that's about to construct one. Still forwarded to a live
+    // transport for correctness if one happens to exist (matches the
+    // AgentRunHandle contract every adapter implements).
+    this.transport?.setModel(modelId)
   }
 
   runCommand(): void {

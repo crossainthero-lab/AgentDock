@@ -115,6 +115,9 @@ export interface AgentEventReducerState {
   /** The real model in use, as reported by the transport's own system/init
    *  message — null until the first one arrives, never guessed. */
   currentModel: string | null
+  /** The real reasoning effort in use for the current model (Codex only
+   *  today) — null until reported, never guessed. */
+  currentReasoningEffort: string | null
   /** The real, effective permission mode reported the same way — may differ
    *  from what AgentDock requested (e.g. a policy override). */
   currentPermissionMode: string | null
@@ -134,6 +137,7 @@ export function createReducerState(): AgentEventReducerState {
     error: null,
     isBusy: false,
     currentModel: null,
+    currentReasoningEffort: null,
     currentPermissionMode: null
   }
 }
@@ -483,7 +487,7 @@ function applyEvent(state: AgentEventReducerState, event: AgentEvent, now: numbe
     }
 
     case 'model_info':
-      return { ...state, currentModel: event.model }
+      return { ...state, currentModel: event.model, currentReasoningEffort: event.reasoningEffort ?? state.currentReasoningEffort }
 
     case 'permission_mode_info':
       return { ...state, currentPermissionMode: event.permissionMode }

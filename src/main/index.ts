@@ -6,6 +6,8 @@ import { ptyService } from './services/pty-service'
 import { childProcessService } from './services/child-process-service'
 import { loadWindowState, saveWindowState } from './window-state'
 import { registerAllIpc } from './ipc'
+import { detectionService } from './services/detection-service'
+import { codexModelCatalogService } from './services/codex-model-catalog-service'
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -96,6 +98,19 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+
+  // Warms the Codex model catalogue cache on startup so the selector has
+  // real data the first time a session opens, per the requirement that it
+  // refresh "when AgentDock starts" — non-blocking and never fatal to
+  // startup if Codex isn't installed or the fetch fails (refresh() itself
+  // already falls back to the cache/current-model rather than throwing).
+  void (async () => {
+    const customPath = settingsService.get().agents.codex.customPath
+    const detection = await detectionService.detect('codex', customPath).catch(() => null)
+    if (detection?.installed && detection.executablePath) {
+      await codexModelCatalogService.refresh(detection.executablePath, settingsService.get().agents.codex.model).catch(() => {})
+    }
+  })()
 })
 
 app.on('window-all-closed', () => {

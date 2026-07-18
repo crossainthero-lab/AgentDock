@@ -46,8 +46,21 @@ const claudeCapabilities: AgentCapabilities = {
 
 const codexCapabilities: AgentCapabilities = {
   agentId: 'codex',
-  // No verified model list/command for `codex exec` — left empty rather
-  // than guessing model ids that might not exist.
+  // Deliberately empty here: Codex models are account/plan-specific and
+  // change over time, so there is no fixed list to declare statically.
+  // The real catalogue is fetched live from the app-server's `model/list`
+  // JSON-RPC method (confirmed real via `codex app-server
+  // generate-json-schema`, then verified live: it returns exactly what the
+  // native Codex model picker shows, including reasoning-effort options
+  // per model and hidden/legacy entries) — see
+  // codex-model-catalog-service.ts. The renderer merges that live result
+  // into this capability object's `models` at read time; a static list
+  // here would just go stale or lie about what an account can't use. An
+  // earlier version of this file hardcoded two models read from
+  // ~/.codex/config.toml's `[tui.model_availability_nux]` section — that
+  // section is picker NUX bookkeeping, not the real catalogue, and this
+  // account alone actually has four visible models plus three hidden
+  // ones, which that section never listed.
   models: [],
   // Real sandbox modes the Codex SDK's ThreadOptions.sandboxMode accepts
   // (see CodexAgentSdkTransport.ts) — non-interactive Codex has no approval
@@ -66,7 +79,14 @@ const codexCapabilities: AgentCapabilities = {
     }
   ],
   commands: [],
-  supportsLiveModelSwitch: false,
+  // "Live" in the same sense the AgentRunHandle.setModel() doc describes
+  // for process-per-turn agents: there's no live process to redirect
+  // mid-turn, but a selection takes effect starting the next turn without
+  // losing conversation context — confirmed empirically via `codex exec
+  // resume <thread_id> -m <model>`, which continues the same thread under
+  // a different model (the CLI only warns that the session was recorded
+  // under a different model; it doesn't restart or lose history).
+  supportsLiveModelSwitch: true,
   supportsLivePermissionSwitch: false,
   authState: 'unknown'
 }

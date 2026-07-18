@@ -58,7 +58,9 @@ const ctx: AgentRunContext = {
   workspacePath: '/tmp/project',
   nativeSessionId: null,
   permissionMode: 'default',
-  executablePath: 'agy'
+  executablePath: 'agy',
+  model: null,
+  reasoningEffort: null
 }
 
 describe('antigravityAdapter', () => {

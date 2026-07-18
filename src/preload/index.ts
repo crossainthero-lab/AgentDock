@@ -24,6 +24,11 @@ const api: AgentDockApi = {
     testExecutable: (agentId, path) => ipcRenderer.invoke(IpcChannels.agentsTestExecutable, agentId, path)
   },
 
+  codex: {
+    getModelCatalog: () => ipcRenderer.invoke(IpcChannels.codexModelCatalogGet),
+    refreshModelCatalog: () => ipcRenderer.invoke(IpcChannels.codexModelCatalogRefresh)
+  },
+
   session: {
     create: (input) => ipcRenderer.invoke(IpcChannels.sessionCreate, input),
     list: (workspaceId) => ipcRenderer.invoke(IpcChannels.sessionList, workspaceId),

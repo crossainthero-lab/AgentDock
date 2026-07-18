@@ -126,6 +126,14 @@ if (typeof window !== 'undefined' && !window.agentDock) {
         return { path, type: 'unknown', ok: false, version: null, output: null, error: 'Not available in browser preview.' }
       }
     },
+    codex: {
+      async getModelCatalog() {
+        return { models: [], source: 'empty' as const, fetchedAt: null, error: 'Not available in browser preview.' }
+      },
+      async refreshModelCatalog() {
+        return { models: [], source: 'empty' as const, fetchedAt: null, error: 'Not available in browser preview.' }
+      }
+    },
     session: {
       async create(input: CreateSessionInput) {
         const id = `mock-session-${sessions.size + 1}`

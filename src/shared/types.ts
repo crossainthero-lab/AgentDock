@@ -139,6 +139,15 @@ export interface AgentSettings {
    *  agent has a different native set (see capability-registry.ts), so this
    *  is intentionally a plain string rather than a shared enum. */
   permissionMode: string
+  /** One of that agent's own AgentCapabilities.models ids, or null to use
+   *  the agent's own configured default (never guessed/hardcoded — see
+   *  capability-registry.ts for how each agent's list was verified). */
+  model: string | null
+  /** One of the selected model's own supportedReasoningEfforts ids (Codex
+   *  only today), or null to use that model's defaultReasoningEffort. A
+   *  separate control from `model` — different models support different
+   *  effort levels. */
+  reasoningEffort: string | null
 }
 
 export interface Settings {
@@ -198,10 +207,37 @@ export interface LaunchTerminalResult {
 // when the relevant list here is non-empty — it never assumes parity across
 // agents.
 
+export interface AgentReasoningEffortOption {
+  id: string
+  label: string
+  description?: string
+}
+
 export interface AgentModelOption {
   id: string
   label: string
   description?: string
+  /** Present only for agents whose model list comes from a live,
+   *  per-account catalogue (Codex's app-server `model/list`) rather than a
+   *  fixed static list — undefined for Claude/Antigravity. `hidden` marks a
+   *  legacy/lesser-used model Codex excludes from its own default picker;
+   *  `supportedReasoningEfforts` is in the exact order the catalogue
+   *  returned it. */
+  hidden?: boolean
+  isDefault?: boolean
+  supportedReasoningEfforts?: AgentReasoningEffortOption[]
+  defaultReasoningEffort?: string
+}
+
+/** Result of fetching Codex's live model catalogue (app-server `model/list`).
+ *  `source` tells the renderer/caller how trustworthy `models` is: a live
+ *  fetch just succeeded, a previously-cached fetch is being reused (e.g.
+ *  offline), or nothing at all is available yet. */
+export interface CodexModelCatalogResult {
+  models: AgentModelOption[]
+  source: 'live' | 'cache' | 'empty'
+  fetchedAt: string | null
+  error?: string
 }
 
 export interface AgentPermissionModeOption {
