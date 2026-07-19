@@ -104,7 +104,12 @@ describe('sessionService — delivery and event sequencing', () => {
   it('writes the prompt and turnId to the transport exactly once per sendPrompt call', async () => {
     await sessionService.sendPrompt('s-once', 'hello there', 't1')
     expect(fakeHandle.send).toHaveBeenCalledTimes(1)
-    expect(fakeHandle.send).toHaveBeenCalledWith('hello there', 't1')
+    expect(fakeHandle.send).toHaveBeenCalledWith('hello there', 't1', undefined)
+  })
+
+  it('CRITICAL (real bug fix): forwards images through to the transport handle, not just to message persistence', async () => {
+    await sessionService.sendPrompt('s-images', 'describe this', 't1', ['/fake/attachments/img1.png'])
+    expect(fakeHandle.send).toHaveBeenCalledWith('describe this', 't1', ['/fake/attachments/img1.png'])
   })
 
   it('assigns a strictly increasing sequence number to each broadcast event for a session', async () => {
@@ -146,6 +151,28 @@ describe('sessionService — delivery and event sequencing', () => {
     fakeHandle.emit({ type: 'turn_completed', sessionId: 's-native', turnId: 't1' })
 
     expect(sessionRepo.setNativeSessionId).toHaveBeenCalledWith('s-native', 'real-session-id')
+  })
+
+  it('response_artifacts persists a new assistant message with responseImages and broadcasts the event', async () => {
+    const received: AgentEvent[] = []
+    const unsubscribe = sessionService.onEvent('s-artifacts', (payload) => received.push(payload.event))
+
+    await sessionService.sendPrompt('s-artifacts', 'make an image', 't1')
+    fakeHandle.emit({
+      type: 'response_artifacts',
+      sessionId: 's-artifacts',
+      turnId: 't1',
+      messageId: 't1-artifacts',
+      images: ['/codexhome/generated_images/tid/call_1.png']
+    })
+
+    expect(messageRepoAdd).toHaveBeenCalledWith('s-artifacts', 'assistant', {
+      kind: 'text',
+      text: '',
+      responseImages: ['/codexhome/generated_images/tid/call_1.png']
+    })
+    expect(received.some((e) => e.type === 'response_artifacts')).toBe(true)
+    unsubscribe()
   })
 
   it('turn_failed persists an error message and does not fabricate turn_completed', async () => {

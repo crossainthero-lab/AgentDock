@@ -11,6 +11,14 @@ import { codexModelCatalogService } from './services/codex-model-catalog-service
 import { claudeModelCatalogService } from './services/claude-model-catalog-service'
 import { workspaceService } from './services/workspace-service'
 
+// Test-only isolation hook: redirects the sqlite DB (and, since Electron
+// scopes its single-instance lock file to userData too, the instance lock
+// itself) to a disposable directory instead of the real user's AgentDock
+// data. Never set outside of automated E2E runs, so real usage is
+// unaffected.
+const customUserDataDir = process.env['AGENTDOCK_USER_DATA_DIR']
+if (customUserDataDir) app.setPath('userData', customUserDataDir)
+
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()

@@ -93,19 +93,23 @@ const codexCapabilities: AgentCapabilities = {
 
 const antigravityCapabilities: AgentCapabilities = {
   agentId: 'antigravity',
-  // Real output of `agy models`.
+  // Real output of `agy models` — the id MUST be the exact display string:
+  // confirmed live that `agy --model <id>` requires it verbatim (a
+  // kebab-case slug like "gemini-3.5-flash-medium" is rejected with
+  // "not recognized as a known model", even though that's a reasonable-
+  // looking id to invent without checking against the real CLI).
   models: [
-    { id: 'gemini-3.5-flash-medium', label: 'Gemini 3.5 Flash (Medium)' },
-    { id: 'gemini-3.5-flash-high', label: 'Gemini 3.5 Flash (High)' },
-    { id: 'gemini-3.5-flash-low', label: 'Gemini 3.5 Flash (Low)' },
-    { id: 'gemini-3.1-pro-low', label: 'Gemini 3.1 Pro (Low)' },
-    { id: 'gemini-3.1-pro-high', label: 'Gemini 3.1 Pro (High)' },
-    { id: 'claude-sonnet-4.6-thinking', label: 'Claude Sonnet 4.6 (Thinking)' },
-    { id: 'claude-opus-4.6-thinking', label: 'Claude Opus 4.6 (Thinking)' },
-    { id: 'gpt-oss-120b-medium', label: 'GPT-OSS 120B (Medium)' }
+    { id: 'Gemini 3.5 Flash (Medium)', label: 'Gemini 3.5 Flash (Medium)' },
+    { id: 'Gemini 3.5 Flash (High)', label: 'Gemini 3.5 Flash (High)' },
+    { id: 'Gemini 3.5 Flash (Low)', label: 'Gemini 3.5 Flash (Low)' },
+    { id: 'Gemini 3.1 Pro (Low)', label: 'Gemini 3.1 Pro (Low)' },
+    { id: 'Gemini 3.1 Pro (High)', label: 'Gemini 3.1 Pro (High)' },
+    { id: 'Claude Sonnet 4.6 (Thinking)', label: 'Claude Sonnet 4.6 (Thinking)' },
+    { id: 'Claude Opus 4.6 (Thinking)', label: 'Claude Opus 4.6 (Thinking)' },
+    { id: 'GPT-OSS 120B (Medium)', label: 'GPT-OSS 120B (Medium)' }
   ],
   // Real flags from `agy --help` (--mode, --dangerously-skip-permissions),
-  // applied at spawn only — no verified live-switch command.
+  // applied at spawn only — no verified live in-process mode-switch command.
   permissionModes: [
     { id: 'default', label: 'Default', description: 'Ask before risky actions' },
     { id: 'accept-edits', label: 'Accept edits', description: '--mode accept-edits' },
@@ -113,9 +117,13 @@ const antigravityCapabilities: AgentCapabilities = {
     { id: 'bypass', label: 'Bypass (dangerous)', description: '--dangerously-skip-permissions' }
   ],
   commands: [],
-  // No verified live /model command for agy — model changes apply at the
-  // next process restart via --model instead.
-  supportsLiveModelSwitch: false,
+  // No live in-process /model command for agy, but AntigravityAdapter's
+  // setModel() genuinely applies a choice by killing the live process and
+  // resuming the same conversation (via --conversation) under the new
+  // model on the next send() — a real, working "next message uses it"
+  // switch, the same honest meaning Codex's supportsLiveModelSwitch:true
+  // already carries (Codex also can't redirect an in-flight process either).
+  supportsLiveModelSwitch: true,
   supportsLivePermissionSwitch: false,
   authState: 'unknown'
 }

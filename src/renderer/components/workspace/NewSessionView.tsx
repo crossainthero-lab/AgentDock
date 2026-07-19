@@ -10,7 +10,7 @@ import './NewSessionView.css'
 const AGENT_DESCRIPTIONS: Record<AgentId, string> = {
   'claude-code': "Anthropic's coding agent, run from its CLI in this project.",
   codex: "OpenAI's coding agent, run from its CLI in this project.",
-  antigravity: 'Runs as a generic terminal-backed process — output is unstructured.'
+  antigravity: "Google's Antigravity coding agent, run from its CLI in this project."
 }
 
 export function NewSessionView(): React.JSX.Element {

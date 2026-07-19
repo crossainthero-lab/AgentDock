@@ -110,6 +110,19 @@ vi.mock('@openai/codex-sdk', () => ({
   })
 }))
 
+// Controllable per-test — real directory-scanning behavior is covered by
+// codex-response-image-service.test.ts's own real-filesystem tests; here we
+// only need to verify the adapter emits response_artifacts at the right
+// moment (before turn_completed) with whatever the service reports.
+const snapshotDirMock = vi.fn(async () => new Set<string>())
+const diffNewImagesMock = vi.fn(async () => [] as string[])
+vi.mock('../../src/main/services/codex-response-image-service', () => ({
+  codexResponseImageService: {
+    snapshotDir: (...args: unknown[]) => snapshotDirMock(...args),
+    diffNewImages: (...args: unknown[]) => diffNewImagesMock(...args)
+  }
+}))
+
 import { codexAdapter } from '../../src/main/agents/codex/CodexAdapter'
 
 const ctx: AgentRunContext = {
@@ -129,6 +142,8 @@ function flushMicrotasks(): Promise<void> {
 describe('codexAdapter', () => {
   beforeEach(() => {
     codexInstances.length = 0
+    snapshotDirMock.mockClear().mockResolvedValue(new Set<string>())
+    diffNewImagesMock.mockClear().mockResolvedValue([])
   })
 
   it('constructs the SDK Codex client with the resolved executable path', async () => {
@@ -352,6 +367,28 @@ describe('codexAdapter', () => {
     expect(events.some((e) => e.type === 'model_info')).toBe(false)
   })
 
+  it('send() with images builds a UserInput[] of one text entry plus one local_image entry per path — Codex\'s real native image mechanism, not embedded base64', async () => {
+    const handle = codexAdapter.start(ctx)
+    handle.send('compare these', 't1', ['/tmp/attachments/s1/a.png', '/tmp/attachments/s1/b.jpg'])
+    await flushMicrotasks()
+
+    const thread = codexInstances[0].threads[0]
+    expect(thread.runStreamedCalls[0].input).toEqual([
+      { type: 'text', text: 'compare these' },
+      { type: 'local_image', path: '/tmp/attachments/s1/a.png' },
+      { type: 'local_image', path: '/tmp/attachments/s1/b.jpg' }
+    ])
+  })
+
+  it('send() with no images passes the plain prompt string, not an array (unchanged text-only path)', async () => {
+    const handle = codexAdapter.start(ctx)
+    handle.send('just text', 't1')
+    await flushMicrotasks()
+
+    const thread = codexInstances[0].threads[0]
+    expect(thread.runStreamedCalls[0].input).toBe('just text')
+  })
+
   it('setModel() updates the model used by the next turn on this handle', async () => {
     const handle = codexAdapter.start(ctx)
     handle.setModel('gpt-5.6-sol')
@@ -362,5 +399,66 @@ describe('codexAdapter', () => {
 
     expect((codexInstances[0].threads[0] as unknown as { __startOptions: { model?: string } }).__startOptions.model).toBe('gpt-5.6-sol')
     expect(events).toContainEqual({ type: 'model_info', sessionId: 's1', turnId: 't1', model: 'gpt-5.6-sol' })
+  })
+
+  it('emits response_artifacts BEFORE turn_completed when the response-image service reports new generated images', async () => {
+    diffNewImagesMock.mockResolvedValue(['/codexhome/generated_images/tid/call_1.png'])
+
+    const handle = codexAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('make an image', 't1')
+    await flushMicrotasks()
+
+    const thread = codexInstances[0].threads[0]
+    thread.push({ type: 'thread.started', thread_id: 'tid' })
+    thread.push({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'Generated the image.' } })
+    thread.push({ type: 'turn.completed', usage: {} })
+    await flushMicrotasks()
+
+    const types = events.map((e) => e.type)
+    const artifactsIndex = types.indexOf('response_artifacts')
+    const completedIndex = types.indexOf('turn_completed')
+    expect(artifactsIndex).toBeGreaterThanOrEqual(0)
+    expect(completedIndex).toBeGreaterThan(artifactsIndex)
+    expect(events).toContainEqual({
+      type: 'response_artifacts',
+      sessionId: 's1',
+      turnId: 't1',
+      messageId: 't1-artifacts',
+      images: ['/codexhome/generated_images/tid/call_1.png']
+    })
+  })
+
+  it('emits no response_artifacts for an ordinary text-only turn (nothing new found)', async () => {
+    diffNewImagesMock.mockResolvedValue([])
+
+    const handle = codexAdapter.start(ctx)
+    const events: AgentEvent[] = []
+    handle.onEvent((e) => events.push(e))
+    handle.send('just say hi', 't1')
+    await flushMicrotasks()
+
+    const thread = codexInstances[0].threads[0]
+    thread.push({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'hi' } })
+    thread.push({ type: 'turn.completed', usage: {} })
+    await flushMicrotasks()
+
+    expect(events.some((e) => e.type === 'response_artifacts')).toBe(false)
+  })
+
+  it('snapshots the generated_images directory using the resumed thread id when one is already known', async () => {
+    const handle = codexAdapter.start({ ...ctx, nativeSessionId: 'prior-thread-id' })
+    handle.send('go', 't1')
+    await flushMicrotasks()
+
+    const thread = codexInstances[0].threads[0]
+    // The snapshot is taken lazily on the first event of the turn (see
+    // CodexAdapter's handleMessage doc comment) — there must be at least
+    // one event before it fires.
+    thread.push({ type: 'turn.started' })
+    await flushMicrotasks()
+
+    expect(snapshotDirMock).toHaveBeenCalledWith('prior-thread-id')
   })
 })

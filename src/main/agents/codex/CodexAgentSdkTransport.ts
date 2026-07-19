@@ -19,7 +19,7 @@
 // process builds to CJS — same situation as ClaudeAgentSdkTransport, same
 // fix: only types are imported statically (erased at compile time), the
 // runtime module is loaded via a cached dynamic `import()`.
-import type { Codex as CodexClass, SandboxMode, Thread, ThreadEvent, ThreadOptions } from '@openai/codex-sdk'
+import type { Codex as CodexClass, Input, SandboxMode, Thread, ThreadEvent, ThreadOptions, UserInput } from '@openai/codex-sdk'
 
 type CodexSdkModule = typeof import('@openai/codex-sdk')
 
@@ -87,7 +87,13 @@ export class CodexAgentSdkTransport {
   private thread: Thread | null = null
   private running = false
   private abortController: AbortController | null = null
-  private readonly messageListeners = new Set<(msg: ThreadEvent) => void>()
+  // Async-capable: CodexAdapter's listener needs to `await` a response-image
+  // directory scan before turn.completed is mapped/emitted (so the resulting
+  // response_artifacts event lands while the turn is still active — see
+  // codex-response-image-service.ts and CodexAdapter's handleMessage). The
+  // launch() loop below awaits each listener call in order, so this is safe
+  // even though there's only ever one real listener in practice.
+  private readonly messageListeners = new Set<(msg: ThreadEvent) => void | Promise<void>>()
   // A Thread only supports one active runStreamed() call at a time.
   // Confirmed empirically against the real SDK: calling runStreamed()
   // again immediately after the previous turn's terminal event
@@ -108,7 +114,7 @@ export class CodexAgentSdkTransport {
     return this.thread?.id ?? null
   }
 
-  onMessage(cb: (msg: ThreadEvent) => void): () => void {
+  onMessage(cb: (msg: ThreadEvent) => void | Promise<void>): () => void {
     this.messageListeners.add(cb)
     return () => this.messageListeners.delete(cb)
   }
@@ -127,14 +133,20 @@ export class CodexAgentSdkTransport {
    *  same-session follow-up produced a fabricated turn_exited for the new
    *  turn moments before its real reply arrived. A dedicated promise per
    *  call makes that cross-talk structurally impossible. */
-  start(prompt: string): Promise<TransportExitInfo> {
+  /** `images` are absolute paths already saved into this session's
+   *  persistent attachment storage (see codex-attachment-service.ts) —
+   *  turned into `{type:'local_image', path}` UserInput entries, Codex's
+   *  real native image-input mechanism (confirmed by reading the SDK's
+   *  compiled source: these become real `--image <path>` flags on the
+   *  underlying `codex exec` invocation, not embedded base64 text). */
+  start(prompt: string, images?: string[]): Promise<TransportExitInfo> {
     this.running = true
-    const result = this.launchChain.then(() => this.launch(prompt))
+    const result = this.launchChain.then(() => this.launch(prompt, images))
     this.launchChain = result
     return result
   }
 
-  private async launch(prompt: string): Promise<TransportExitInfo> {
+  private async launch(prompt: string, images?: string[]): Promise<TransportExitInfo> {
     try {
       const { Codex } = await loadSdk()
       if (!this.codex) {
@@ -162,9 +174,16 @@ export class CodexAgentSdkTransport {
       }
 
       this.abortController = new AbortController()
-      const { events } = await this.thread.runStreamed(prompt, { signal: this.abortController.signal })
+      const input: Input =
+        images && images.length > 0
+          ? [{ type: 'text', text: prompt }, ...images.map((path): UserInput => ({ type: 'local_image', path }))]
+          : prompt
+      const { events } = await this.thread.runStreamed(input, { signal: this.abortController.signal })
       for await (const event of events) {
-        for (const listener of this.messageListeners) listener(event)
+        // Sequential await, not Promise.all — a listener that needs to act
+        // before the NEXT event is processed (e.g. scanning for generated
+        // images before turn.completed is mapped) depends on this ordering.
+        for (const listener of this.messageListeners) await listener(event)
       }
       this.running = false
       return { errored: false }

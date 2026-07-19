@@ -40,7 +40,7 @@ export interface SessionConversationState {
 }
 
 export interface SessionConversationActions {
-  sendPrompt(text: string): Promise<void>
+  sendPrompt(text: string, images?: string[]): Promise<void>
   retryMessage(userMessageId: string): Promise<void>
   interrupt(): Promise<void>
   stop(): Promise<void>
@@ -104,10 +104,28 @@ function sessionStatusForEvent(type: AgentEvent['type']): SessionStatus | null {
   }
 }
 
+// CRITICAL (real bug, confirmed twice via live testing against Antigravity):
+// this previously matched specific `turn.status` enum values
+// (submitted/working/streaming) to decide "is a turn genuinely active" —
+// which missed real in-flight states, e.g. immediately after a pending
+// interaction is answered (`pendingInteraction` clears, but `turn.status`
+// doesn't itself transition to 'working' until the next real transport
+// event arrives). Live evidence: the header showed "Ready" for a full
+// 4+ minutes of real, continuous Antigravity processing after a permission
+// prompt was answered, while the Send/Stop button — correctly driven by
+// `isBusy` — stayed on "Stop" the entire time. `isBusy` is the one flag
+// every busy/idle-sensitive control in this app already trusts (it's set
+// the instant a prompt is submitted and cleared only by a genuine terminal
+// event — turn_completed/turn_failed/turn_cancelled/turn_exited), so using
+// it directly here — instead of re-deriving "busy" from a partial list of
+// turn.status values — is what keeps the header and the button unable to
+// disagree, by construction, rather than by enumerating every state that
+// happens to exist today.
 function deriveStatus(session: Session | null, reducer: AgentEventReducerState): SessionStatus {
   if (reducer.turn?.status === 'awaiting_interaction' && reducer.pendingInteraction) {
     return reducer.pendingInteraction.kind === 'permission' ? 'waiting_for_permission' : 'waiting_for_user'
   }
+  if (reducer.isBusy) return 'running'
   if (reducer.error) return 'error'
   return session?.status ?? 'idle'
 }
@@ -244,20 +262,20 @@ export function useSessionConversation(sessionId: string | null): SessionConvers
     return () => clearInterval(timer)
   }, [reducerState.isBusy])
 
-  async function sendPrompt(text: string): Promise<void> {
+  async function sendPrompt(text: string, images?: string[]): Promise<void> {
     if (!sessionId || !sessionRef.current) return
     const userMessageId = crypto.randomUUID()
     const turnId = crypto.randomUUID()
     const agentDisplayName = AGENT_DISPLAY_NAMES[sessionRef.current.agentId]
 
     // Optimistic, local, immediate — inserted before any IPC/PTY round trip.
-    setReducerState((prev) => beginSend(prev, { sessionId, userMessageId, turnId, text, agentDisplayName }))
+    setReducerState((prev) => beginSend(prev, { sessionId, userMessageId, turnId, text, images, agentDisplayName }))
     pushTrace({ kind: 'USER_MESSAGE_CREATED', turnId, eventId: userMessageId })
     pushTrace({ kind: 'TURN_CREATED', turnId })
     pushTrace({ kind: 'ACTIVITY_CREATED', turnId })
 
     try {
-      await getAgentDock().session.sendPrompt(sessionId, text, turnId)
+      await getAgentDock().session.sendPrompt(sessionId, text, turnId, images)
       setReducerState((prev) => markSent(prev, userMessageId))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

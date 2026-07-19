@@ -10,6 +10,12 @@ import './SessionHeader.css'
 
 interface SessionHeaderProps {
   session: Session
+  /** The live, corrected status — reflects a pending permission/question
+   *  immediately via the reducer (see useSessionConversation's deriveStatus),
+   *  unlike `session.status` which is only a locally-mirrored copy of the
+   *  persisted value and doesn't update for non-terminal states like
+   *  waiting_for_permission/waiting_for_user until the next full refetch. */
+  status: SessionStatus
   changedFileCount: number
   capabilities: AgentCapabilities | null
   currentPermissionMode: string
@@ -87,12 +93,15 @@ function claudeModelDisplay(
   return turnLikelyActive ? { label: 'Detecting model…', selectedId: null } : { label: 'Claude — Unknown model', selectedId: null }
 }
 
-/** Resolves the Model menu's trigger text for a Codex session. Unlike
- *  Claude, Codex's JSON stream never echoes the active model back — what
- *  AgentDock knows is exactly what it told Codex to use (see CodexAdapter's
- *  model_info emission), so this only ever shows a real selected model or
- *  the generic placeholder — never a guess at what Codex's own config
- *  default might be on this machine. */
+/** Resolves the Model menu's trigger text for a Codex or Antigravity
+ *  session. Unlike Claude, neither transport ever echoes the active model
+ *  back on its own — what AgentDock knows is exactly what it told the CLI
+ *  to use (see CodexAdapter's/AntigravityAdapter's model_info emission), so
+ *  this only ever shows a real selected model or the generic placeholder —
+ *  never a guess at what the CLI's own config default might be on this
+ *  machine. Model ids for both agents are exact-equality matches
+ *  (Antigravity's ids are the literal display strings it expects on
+ *  `--model`), so one helper serves both. */
 function codexModelDisplay(currentModel: string | null, models: AgentModelOption[]): { label: string; selectedId: string | null } {
   if (!currentModel) return { label: 'Model', selectedId: null }
   const match = models.find((m) => m.id === currentModel)
@@ -138,6 +147,7 @@ function reasoningEffortDisplay(
 
 export function SessionHeader({
   session,
+  status,
   changedFileCount,
   capabilities,
   currentPermissionMode,
@@ -163,14 +173,15 @@ export function SessionHeader({
   const [showLegacyModels, setShowLegacyModels] = useState(false)
   const isClaude = session.agentId === 'claude-code'
   const isCodex = session.agentId === 'codex'
+  const isAntigravity = session.agentId === 'antigravity'
   const modelDisplay = isClaude
-    ? claudeModelDisplay(currentModel, capabilities?.models ?? [], session.status)
-    : isCodex
+    ? claudeModelDisplay(currentModel, capabilities?.models ?? [], status)
+    : isCodex || isAntigravity
       ? codexModelDisplay(currentModel, capabilities?.models ?? [])
       : { label: 'Model', selectedId: null }
   const displayedPermissionMode = effectivePermissionMode ?? currentPermissionMode
   const permissionModeOption = capabilities?.permissionModes.find((m) => m.id === displayedPermissionMode)
-  const isBusy = session.status === 'running' || session.status === 'waiting_for_permission' || session.status === 'waiting_for_user'
+  const isBusy = status === 'running' || status === 'waiting_for_permission' || status === 'waiting_for_user'
 
   // Codex's live catalogue mixes visible and legacy/hidden models together
   // (see codex-model-catalog-service.ts) — split them so legacy ones are
@@ -197,8 +208,8 @@ export function SessionHeader({
         <span className="ad-session-header__title">{session.title}</span>
         <span className="ad-session-header__agent">{AGENT_DISPLAY_NAMES[session.agentId]}</span>
         <span className="ad-session-header__status">
-          <StatusDot status={session.status} />
-          {statusLabel(session.status)}
+          <StatusDot status={status} />
+          {statusLabel(status)}
         </span>
       </div>
 
@@ -210,7 +221,7 @@ export function SessionHeader({
           label="Model"
           items={isCodex ? codexModelMenuItems : (capabilities?.models ?? [])}
           selectedId={modelDisplay.selectedId}
-          selectedLabel={isClaude || isCodex ? modelDisplay.label : undefined}
+          selectedLabel={isClaude || isCodex || isAntigravity ? modelDisplay.label : undefined}
           onSelect={onSetModel}
           disabled={!capabilities?.supportsLiveModelSwitch}
         />

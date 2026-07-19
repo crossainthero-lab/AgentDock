@@ -84,6 +84,16 @@ export type AgentEvent =
   // The real, effective permission mode reported by the same system/init
   // message (may differ from what AgentDock requested, e.g. a policy override).
   | (AgentEventBase & { type: 'permission_mode_info'; permissionMode: string })
+  // Images genuinely produced or referenced by the agent during this turn
+  // (Codex only today — see codex-response-image-service.ts's module
+  // comment for why this exists as its own event rather than folding into
+  // assistant_completed: the built-in image_gen tool call is invisible in
+  // Codex's own event stream, discovered only by diffing its generated_images
+  // directory after the turn completes, so there's no single item.completed
+  // to attach it to). Always emitted before turn_completed for the same
+  // turn, never after — isForActiveTurn would otherwise reject it once the
+  // turn reaches a terminal status.
+  | (AgentEventBase & { type: 'response_artifacts'; messageId: string; images: string[] })
 
 export interface SessionEventEnvelope {
   sessionId: string

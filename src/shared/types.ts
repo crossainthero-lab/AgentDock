@@ -67,7 +67,26 @@ export interface Session {
 export type MessageRole = 'user' | 'assistant' | 'system' | 'error' | 'approval'
 
 export type MessageContent =
-  | { kind: 'text'; text: string }
+  | {
+      kind: 'text'
+      text: string
+      /** Absolute paths into this session's own persistent attachment
+       *  directory (see codex-attachment-service.ts) — Codex sessions
+       *  only. Never a workspace-relative path, never base64 embedded
+       *  here; resolved to a data URL for display via a dedicated
+       *  session-scoped IPC call, the same pattern media.resolveImage
+       *  uses for workspace-scoped Markdown images. */
+      images?: string[]
+      /** Images genuinely produced or referenced by Codex during this
+       *  message's turn (assistant role only) — the built-in image_gen
+       *  tool's output, discovered by diffing Codex's own generated_images
+       *  directory (see codex-response-image-service.ts), never guessed
+       *  from Markdown text. A separate field from `images` above because
+       *  the two have different resolution semantics/allowed roots (user
+       *  attachment storage vs. workspace/attachment-storage/
+       *  generated_images) even though both end up as a path list. */
+      responseImages?: string[]
+    }
   | {
       kind: 'activity'
       tool: string
@@ -173,6 +192,19 @@ export interface HandoffExecuteInput {
   destinationAgentId: AgentId
   summary: string
   additionalInstruction: string
+}
+
+/** Result of saving a picked/pasted/dropped image into a Codex session's
+ *  persistent attachment storage. */
+export interface AttachmentSaveResult {
+  path?: string
+  error?: string
+}
+
+/** Result of reading a previously-saved attachment back for display. */
+export interface AttachmentResolveResult {
+  dataUrl?: string
+  error?: string
 }
 
 export interface Diagnostics {

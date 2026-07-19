@@ -50,10 +50,13 @@ export function registerSessionIpc(window: BrowserWindow): void {
     return sessionService.get(sessionId)
   })
 
-  ipcMain.handle(IpcChannels.sessionSendPrompt, async (_event, sessionId: string, text: string, turnId: string) => {
-    ensureForwarding(window, sessionId)
-    await sessionService.sendPrompt(sessionId, text, turnId)
-  })
+  ipcMain.handle(
+    IpcChannels.sessionSendPrompt,
+    async (_event, sessionId: string, text: string, turnId: string, images?: string[]) => {
+      ensureForwarding(window, sessionId)
+      await sessionService.sendPrompt(sessionId, text, turnId, images)
+    }
+  )
 
   ipcMain.handle(IpcChannels.sessionInterrupt, (_event, sessionId: string) => sessionService.interrupt(sessionId))
   ipcMain.handle(IpcChannels.sessionStop, (_event, sessionId: string) => sessionService.stop(sessionId))

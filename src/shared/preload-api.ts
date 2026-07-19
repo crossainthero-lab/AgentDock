@@ -5,6 +5,8 @@ import type {
   AgentModelOption,
   ApprovalDecision,
   ApprovalRequest,
+  AttachmentResolveResult,
+  AttachmentSaveResult,
   ChangedFile,
   CodexModelCatalogResult,
   CreateSessionInput,
@@ -67,6 +69,35 @@ export interface AgentDockApi {
      *  updates the cache — used at app start, on the Settings "Refresh"
      *  action, and the Model menu's own refresh button. */
     refreshModelCatalog(): Promise<CodexModelCatalogResult>
+    /** Opens a native multi-select image picker. Returns the user's real
+     *  file paths, not yet saved into persistent storage — pass each to
+     *  saveAttachmentFromPath() to actually keep it. Empty if cancelled. */
+    browseAttachments(): Promise<string[]>
+    /** Copies a file already on disk (from the picker or a drag-and-drop
+     *  event that exposed a real path) into this session's persistent
+     *  attachment storage. */
+    saveAttachmentFromPath(sessionId: string, sourcePath: string): Promise<AttachmentSaveResult>
+    /** Saves a pasted/dropped image delivered as a data URL (clipboard and
+     *  drag-and-drop content arrives as blobs in the DOM) into this
+     *  session's persistent attachment storage. */
+    saveAttachmentFromDataUrl(sessionId: string, dataUrl: string): Promise<AttachmentSaveResult>
+    /** Reads a previously-saved attachment back as a data URL for display
+     *  — used for both the composer's pending thumbnails and images
+     *  already sent in the conversation. */
+    resolveAttachment(sessionId: string, attachmentPath: string): Promise<AttachmentResolveResult>
+    /** Reads a genuine Codex-response image artifact back as a data URL —
+     *  restricted main-process-side to the active workspace, this session's
+     *  own attachment storage, or this session's own thread's
+     *  generated_images directory (see codex-response-image-service.ts).
+     *  Never arbitrary filesystem access; a path outside all three returns
+     *  an error rather than being read. */
+    resolveResponseImage(sessionId: string, path: string): Promise<AttachmentResolveResult>
+    /** Reveals a generated/referenced response image in the OS file
+     *  explorer — same containment restriction as resolveResponseImage. */
+    revealResponseImage(sessionId: string, path: string): Promise<{ ok: boolean; error?: string }>
+    /** Opens a generated/referenced response image with the OS default
+     *  application — same containment restriction as resolveResponseImage. */
+    openResponseImageExternally(sessionId: string, path: string): Promise<{ ok: boolean; error?: string }>
   }
   claude: {
     /** Fast, non-blocking — returns the cached (or plain static,
@@ -76,6 +107,33 @@ export interface AgentDockApi {
      *  Query.supportedModels() and updates the cache. */
     refreshModelCatalog(): Promise<AgentModelOption[]>
   }
+  antigravity: {
+    /** Opens a native multi-select image picker. Returns the user's real
+     *  file paths, not yet saved into persistent storage — pass each to
+     *  saveAttachmentFromPath() to actually keep it. Empty if cancelled. */
+    browseAttachments(): Promise<string[]>
+    /** Copies a file already on disk into this session's persistent
+     *  attachment storage — later re-read at send time and written onto the
+     *  OS clipboard for a real Ctrl+V paste into the live agy PTY (agy's
+     *  genuine native image-input mechanism; confirmed live, see
+     *  AntigravityAdapter.ts). */
+    saveAttachmentFromPath(sessionId: string, sourcePath: string): Promise<AttachmentSaveResult>
+    /** Saves a pasted/dropped image delivered as a data URL into this
+     *  session's persistent attachment storage. */
+    saveAttachmentFromDataUrl(sessionId: string, dataUrl: string): Promise<AttachmentSaveResult>
+    /** Reads a previously-saved attachment back as a data URL for display. */
+    resolveAttachment(sessionId: string, attachmentPath: string): Promise<AttachmentResolveResult>
+    /** Reads a genuine Antigravity-response image artifact back as a data
+     *  URL — restricted to the active workspace or this session's own
+     *  attachment storage (see antigravity-response-image-service.ts). */
+    resolveResponseImage(sessionId: string, path: string): Promise<AttachmentResolveResult>
+    /** Reveals a generated/referenced response image in the OS file
+     *  explorer — same containment restriction as resolveResponseImage. */
+    revealResponseImage(sessionId: string, path: string): Promise<{ ok: boolean; error?: string }>
+    /** Opens a generated/referenced response image with the OS default
+     *  application — same containment restriction as resolveResponseImage. */
+    openResponseImageExternally(sessionId: string, path: string): Promise<{ ok: boolean; error?: string }>
+  }
   session: {
     create(input: CreateSessionInput): Promise<Session>
     list(workspaceId: string): Promise<Session[]>
@@ -83,8 +141,11 @@ export interface AgentDockApi {
     /** `turnId` is generated by the renderer (crypto.randomUUID()) and
      *  becomes the id every AgentEvent for this turn carries — it's what
      *  lets the shared reducer scope events to the right turn (see
-     *  AgentEventReducer's `isForActiveTurn`). */
-    sendPrompt(sessionId: string, text: string, turnId: string): Promise<void>
+     *  AgentEventReducer's `isForActiveTurn`). `images` is a Codex-only
+     *  concept — absolute paths already saved into this session's
+     *  attachment storage (see codex.saveAttachmentFrom*) — silently
+     *  ignored by every other agent. */
+    sendPrompt(sessionId: string, text: string, turnId: string, images?: string[]): Promise<void>
     interrupt(sessionId: string): Promise<void>
     stop(sessionId: string): Promise<void>
     delete(sessionId: string): Promise<void>

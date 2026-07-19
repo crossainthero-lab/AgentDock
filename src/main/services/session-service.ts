@@ -85,11 +85,14 @@ export const sessionService = {
     return { ...session, messages: messageRepo.listBySession(sessionId) }
   },
 
-  async sendPrompt(sessionId: string, text: string, turnId: string): Promise<void> {
+  async sendPrompt(sessionId: string, text: string, turnId: string, images?: string[]): Promise<void> {
+    if (process.env['AGENTDOCK_DEBUG_RAW_PTY']) {
+      console.log(`[session:senddebug] sendPrompt called t=${Date.now()} sessionId=${sessionId} turnId=${turnId} text=${JSON.stringify(text)}`)
+    }
     const session = sessionRepo.get(sessionId)
     if (!session) throw new Error('Session not found.')
 
-    messageRepo.add(sessionId, 'user', { kind: 'text', text })
+    messageRepo.add(sessionId, 'user', { kind: 'text', text, images: images && images.length > 0 ? images : undefined })
     sessionRepo.setStatus(sessionId, 'running')
 
     let run = running.get(sessionId)
@@ -132,6 +135,17 @@ export const sessionService = {
         switch (event.type) {
           case 'assistant_completed':
             messageRepo.add(sessionId, 'assistant', { kind: 'text', text: event.text })
+            broadcastEvent(sessionId, event)
+            return
+          case 'response_artifacts':
+            // Its own assistant bubble (empty text, images only) rather than
+            // merged into the preceding assistant_completed row — the image
+            // is only discovered via a directory diff at turn.completed,
+            // well after that row was already persisted, and this app's
+            // message store is append-only (see AgentEventReducer.ts's
+            // module comment); there is no update-in-place path to attach
+            // it to the earlier row instead.
+            messageRepo.add(sessionId, 'assistant', { kind: 'text', text: '', responseImages: event.images })
             broadcastEvent(sessionId, event)
             return
           case 'activity_completed': {
@@ -256,7 +270,7 @@ export const sessionService = {
     }
 
     trace(sessionId, { kind: 'PTY_WRITE_REQUESTED' })
-    run.handle.send(text, turnId)
+    run.handle.send(text, turnId, images)
     trace(sessionId, { kind: 'PTY_WRITE_SUCCEEDED' })
   },
 

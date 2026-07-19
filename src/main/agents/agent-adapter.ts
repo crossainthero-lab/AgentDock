@@ -26,8 +26,14 @@ export interface AgentRunHandle {
   /** `turnId` is the AgentDock-assigned id for this specific turn — every
    *  AgentEvent the handle emits in response must carry it, so the shared
    *  reducer can scope the event to the right turn (see AgentEventReducer's
-   *  `isForActiveTurn`). */
-  send(prompt: string, turnId: string): void
+   *  `isForActiveTurn`). `images` is absolute paths already saved into
+   *  this session's persistent attachment storage (Codex only today —
+   *  Codex's SDK accepts `{type:'local_image', path}` entries alongside
+   *  text, which become real `--image <path>` flags on the underlying
+   *  `codex exec` invocation; confirmed by reading the SDK's compiled
+   *  source and verified live). Every other adapter ignores this
+   *  parameter entirely — it's additive, not a behavior change for them. */
+  send(prompt: string, turnId: string, images?: string[]): void
   /** Raw stdin write straight into the live PTY — used by the Terminal
    *  drawer's keyboard input for manual fallback interaction. A no-op for
    *  structured-transport agents (Claude, Codex), which have no PTY and

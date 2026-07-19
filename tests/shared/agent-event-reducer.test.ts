@@ -134,6 +134,33 @@ describe('assistant reply appears exactly once', () => {
     expect(assistantItems[0]).toMatchObject({ text: 'pong' })
   })
 
+  it('response_artifacts adds a new assistant item (empty text, responseImages set) after the text reply, not merged into it', () => {
+    let state = createReducerState()
+    state = send(state, 'make an image')
+    state = applyEnvelope(state, envelope({ type: 'assistant_completed', messageId: 'm1', text: 'Generated the image.' }, 1)).state
+    state = applyEnvelope(
+      state,
+      envelope({ type: 'response_artifacts', messageId: 'm1-artifacts', images: ['/codexhome/generated_images/tid/call_1.png'] }, 2)
+    ).state
+
+    const assistantItems = state.items.filter((i) => i.kind === 'assistant')
+    expect(assistantItems).toHaveLength(2)
+    expect(assistantItems[0]).toMatchObject({ text: 'Generated the image.' })
+    expect(assistantItems[1]).toMatchObject({ text: '', responseImages: ['/codexhome/generated_images/tid/call_1.png'] })
+  })
+
+  it('response_artifacts with multiple images preserves the given order', () => {
+    let state = createReducerState()
+    state = send(state, 'make two images')
+    state = applyEnvelope(
+      state,
+      envelope({ type: 'response_artifacts', messageId: 'm1-artifacts', images: ['/a/first.png', '/a/second.png'] }, 1)
+    ).state
+
+    const assistantItems = state.items.filter((i) => i.kind === 'assistant')
+    expect(assistantItems[0]).toMatchObject({ responseImages: ['/a/first.png', '/a/second.png'] })
+  })
+
   it('a final turn_completed event after streaming does not duplicate the streamed message', () => {
     let state = createReducerState()
     state = send(state, 'go')
@@ -238,6 +265,14 @@ describe('working / thinking state', () => {
 
     state = applyEnvelope(state, envelope({ type: 'activity_updated', activityId: 'a1', elapsedMs: 500 }, 2)).state
     expect(state.items.filter((i) => i.kind === 'tool-activity')).toHaveLength(1)
+  })
+
+  it('CRITICAL (real bug fix): a bare activity_updated with no prior activity_started (Antigravity\'s generic busy heartbeat) never creates a ChatItem, only updates the ticker phrase', () => {
+    let state = createReducerState()
+    state = send(state, 'go')
+    state = applyEnvelope(state, envelope({ type: 'activity_updated', activityId: 'heartbeat', label: 'Working', elapsedMs: 1000 }, 1)).state
+    expect(state.items.filter((i) => i.kind === 'tool-activity')).toHaveLength(0)
+    expect(state.isBusy).toBe(true)
   })
 
   it('tool activity appends one tool-activity item per activityId', () => {

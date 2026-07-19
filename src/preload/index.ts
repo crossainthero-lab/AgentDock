@@ -26,7 +26,14 @@ const api: AgentDockApi = {
 
   codex: {
     getModelCatalog: () => ipcRenderer.invoke(IpcChannels.codexModelCatalogGet),
-    refreshModelCatalog: () => ipcRenderer.invoke(IpcChannels.codexModelCatalogRefresh)
+    refreshModelCatalog: () => ipcRenderer.invoke(IpcChannels.codexModelCatalogRefresh),
+    browseAttachments: () => ipcRenderer.invoke(IpcChannels.codexAttachmentsBrowse),
+    saveAttachmentFromPath: (sessionId, sourcePath) => ipcRenderer.invoke(IpcChannels.codexAttachmentsSaveFromPath, sessionId, sourcePath),
+    saveAttachmentFromDataUrl: (sessionId, dataUrl) => ipcRenderer.invoke(IpcChannels.codexAttachmentsSaveFromDataUrl, sessionId, dataUrl),
+    resolveAttachment: (sessionId, attachmentPath) => ipcRenderer.invoke(IpcChannels.codexAttachmentsResolve, sessionId, attachmentPath),
+    resolveResponseImage: (sessionId, path) => ipcRenderer.invoke(IpcChannels.codexResponseImageResolve, sessionId, path),
+    revealResponseImage: (sessionId, path) => ipcRenderer.invoke(IpcChannels.codexResponseImageReveal, sessionId, path),
+    openResponseImageExternally: (sessionId, path) => ipcRenderer.invoke(IpcChannels.codexResponseImageOpenExternally, sessionId, path)
   },
 
   claude: {
@@ -34,11 +41,25 @@ const api: AgentDockApi = {
     refreshModelCatalog: () => ipcRenderer.invoke(IpcChannels.claudeModelCatalogRefresh)
   },
 
+  antigravity: {
+    browseAttachments: () => ipcRenderer.invoke(IpcChannels.antigravityAttachmentsBrowse),
+    saveAttachmentFromPath: (sessionId, sourcePath) =>
+      ipcRenderer.invoke(IpcChannels.antigravityAttachmentsSaveFromPath, sessionId, sourcePath),
+    saveAttachmentFromDataUrl: (sessionId, dataUrl) =>
+      ipcRenderer.invoke(IpcChannels.antigravityAttachmentsSaveFromDataUrl, sessionId, dataUrl),
+    resolveAttachment: (sessionId, attachmentPath) =>
+      ipcRenderer.invoke(IpcChannels.antigravityAttachmentsResolve, sessionId, attachmentPath),
+    resolveResponseImage: (sessionId, path) => ipcRenderer.invoke(IpcChannels.antigravityResponseImageResolve, sessionId, path),
+    revealResponseImage: (sessionId, path) => ipcRenderer.invoke(IpcChannels.antigravityResponseImageReveal, sessionId, path),
+    openResponseImageExternally: (sessionId, path) =>
+      ipcRenderer.invoke(IpcChannels.antigravityResponseImageOpenExternally, sessionId, path)
+  },
+
   session: {
     create: (input) => ipcRenderer.invoke(IpcChannels.sessionCreate, input),
     list: (workspaceId) => ipcRenderer.invoke(IpcChannels.sessionList, workspaceId),
     get: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionGet, sessionId),
-    sendPrompt: (sessionId, text, turnId) => ipcRenderer.invoke(IpcChannels.sessionSendPrompt, sessionId, text, turnId),
+    sendPrompt: (sessionId, text, turnId, images) => ipcRenderer.invoke(IpcChannels.sessionSendPrompt, sessionId, text, turnId, images),
     interrupt: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionInterrupt, sessionId),
     stop: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionStop, sessionId),
     delete: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionDelete, sessionId),

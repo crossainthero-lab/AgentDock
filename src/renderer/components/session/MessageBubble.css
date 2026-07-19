@@ -36,6 +36,13 @@
   word-break: break-word;
 }
 
+.ad-message__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 .ad-message__text--plain {
   white-space: pre-wrap;
 }

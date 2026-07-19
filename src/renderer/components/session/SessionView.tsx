@@ -123,6 +123,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
   if (!workspace || !conversation.session) return null
 
   const session: Session = conversation.session
+  const attachmentBackend: 'codex' | 'antigravity' = session.agentId === 'antigravity' ? 'antigravity' : 'codex'
   const detection = agents.find((a) => a.agentId === session.agentId)
   const agentInstalled = detection?.installed ?? false
   const composerDisabled = !agentInstalled
@@ -164,6 +165,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
       <div className="ad-session-view__main">
         <SessionHeader
           session={session}
+          status={conversation.status}
           changedFileCount={changedCount}
           capabilities={effectiveCapabilities}
           currentPermissionMode={settings?.agents[session.agentId]?.permissionMode ?? 'default'}
@@ -192,6 +194,20 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
             // future sessions.
             if (session.agentId === 'codex') {
               void updateSettings({ agents: { codex: { model: modelId } } })
+              return
+            }
+            if (session.agentId === 'antigravity') {
+              // Both matter: session-service only constructs a live handle
+              // (and reads ctx.model from settings) on this session's FIRST
+              // send, so a model picked before any message would otherwise
+              // be silently dropped (no running handle yet for
+              // conversation.setModel to reach — a real bug found via live
+              // testing) — persisting fixes that and also survives
+              // restart/resume. The live call on top still applies an
+              // in-conversation change immediately (kill+respawn under the
+              // new model) when a process is already running.
+              void updateSettings({ agents: { antigravity: { model: modelId } } })
+              conversation.setModel(modelId).catch((err) => reportActionError('Set model', err))
               return
             }
             conversation.setModel(modelId).catch((err) => reportActionError('Set model', err))
@@ -257,15 +273,20 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           }}
           onOpenTerminal={openTerminal}
           workspaceId={workspace.id}
+          sessionId={sessionId}
+          attachmentBackend={attachmentBackend}
         />
 
         <PromptComposer
           disabled={composerDisabled}
           disabledReason={composerDisabledReason}
           isRunning={conversation.isBusy}
-          onSend={(text) => {
+          imagesEnabled={session.agentId === 'codex' || session.agentId === 'antigravity'}
+          attachmentBackend={attachmentBackend}
+          sessionId={sessionId}
+          onSend={(text, images) => {
             setActionError(null)
-            conversation.sendPrompt(text).catch((err) => reportActionError('Send', err))
+            conversation.sendPrompt(text, images).catch((err) => reportActionError('Send', err))
           }}
           onInterrupt={() => {
             conversation.interrupt().catch((err) => reportActionError('Interrupt', err))

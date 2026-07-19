@@ -27,3 +27,10 @@ export type ClassifiedScreenEvent =
   | { type: 'warning'; message: string }
   | { type: 'error'; message: string }
   | { type: 'session_complete'; exitCode: number | null }
+  // The screen has genuinely settled into "? for shortcuts" idle-composer
+  // chrome — agy's real signal that it's ready for the next prompt. This is
+  // the PRIMARY per-turn completion signal (see AntigravityClassifier's
+  // module comment): agy's interactive process stays alive across turns, so
+  // session_complete (process exit) alone can never resolve a turn while a
+  // conversation continues.
+  | { type: 'turn_ready' }

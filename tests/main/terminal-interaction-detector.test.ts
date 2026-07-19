@@ -35,7 +35,8 @@ describe('detectGenericInteraction', () => {
       options: [
         { id: '1', label: 'staging' },
         { id: '2', label: 'production' }
-      ]
+      ],
+      menuStartIndex: 0
     })
   })
 
@@ -63,8 +64,37 @@ describe('detectGenericInteraction', () => {
       options: [
         { id: 'y', label: 'Yes' },
         { id: 'n', label: 'No' }
-      ]
+      ],
+      menuStartIndex: 0
     })
+  })
+
+  it('includes the real requested command in the prompt for a real captured Antigravity command-permission menu (not just the bare question)', () => {
+    const guess = detectGenericInteraction([
+      '● Bash(echo hello-from-shell) (ctrl+o to expand)',
+      '',
+      'Command',
+      '────────────────────────────────────────────────────────────',
+      '',
+      'Requesting permission for:',
+      '   echo hello-from-shell',
+      '',
+      'Do you want to proceed?',
+      '> 1. Yes',
+      "  2. Yes, and always allow in this conversation for commands that start with 'echo hello-from-shell'",
+      "  3. Yes, and always allow for commands that start with 'echo hello-from-shell' (Persist to settings.json)",
+      '  4. No',
+      '',
+      '  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command'
+    ])
+    expect(guess?.kind).toBe('permission')
+    expect(guess?.prompt).toBe('Requesting permission for:\necho hello-from-shell\nDo you want to proceed?')
+    expect(guess?.options).toEqual([
+      { id: '1', label: 'Yes' },
+      { id: '2', label: "Yes, and always allow in this conversation for commands that start with 'echo hello-from-shell'" },
+      { id: '3', label: "Yes, and always allow for commands that start with 'echo hello-from-shell' (Persist to settings.json)" },
+      { id: '4', label: 'No' }
+    ])
   })
 
   it('returns null for ordinary prose', () => {
@@ -88,7 +118,8 @@ describe('detectGenericInteraction', () => {
       options: [
         { id: 'arrow:0', label: 'Yes, I trust this folder' },
         { id: 'arrow:1', label: 'No, exit' }
-      ]
+      ],
+      menuStartIndex: 2
     })
   })
 
@@ -128,5 +159,20 @@ describe('detectAuthRequired', () => {
 
   it('returns null for unrelated output', () => {
     expect(detectAuthRequired(['Everything looks good.'])).toBeNull()
+  })
+
+  it('detects the real captured Antigravity "not signed in" wording (distinct phrasing from "not logged in")', () => {
+    expect(detectAuthRequired(['Welcome to the Antigravity CLI. You are currently not signed in.'])).toBe(
+      'Welcome to the Antigravity CLI. You are currently not signed in.'
+    )
+  })
+
+  it('prefers the actual matched sentence over a trailing transient spinner line', () => {
+    const message = detectAuthRequired([
+      'Welcome to the Antigravity CLI. You are currently not signed in.',
+      '',
+      '⣾  Signing in...'
+    ])
+    expect(message).toBe('Welcome to the Antigravity CLI. You are currently not signed in.')
   })
 })
