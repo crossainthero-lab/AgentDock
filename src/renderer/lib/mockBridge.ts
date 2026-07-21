@@ -363,7 +363,9 @@ if (typeof window !== 'undefined' && !window.agentDock) {
         }
         sessions.set(id, session)
         messages.set(id, [])
-        return session
+        const instruction = input.additionalInstruction.trim()
+        const prompt = `${instruction || 'Continue the work described below.'}\n\n--- Continuation context ---\n${input.summary.trim()}`
+        return { session, prompt }
       }
     },
     windowCtl: {

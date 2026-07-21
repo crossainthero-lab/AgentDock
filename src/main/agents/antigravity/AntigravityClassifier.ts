@@ -110,6 +110,18 @@ const GENERATING_LINE = /^Generating\.\.\.$/i
 // text. Matched directly here too — belt and suspenders, since it's a fixed
 // status string, never genuine model output.
 const THOUGHT_SUBTITLE_LINE = /^Prioritizing Tool Usage$/i
+// CRITICAL (real bug fix, found via a real captured process-exit sequence):
+// agy prints its own graceful-shutdown chrome ("Resume with -c (or command
+// below): / agy --conversation=<uuid>") to the screen when the process
+// exits — TerminalSessionController's onExit handler emits one final
+// snapshot (see its own module comment) that includes this text if it was
+// already written by the time the process died. Without this filter, that
+// chrome got classified as ordinary prose and appended straight onto the
+// turn's real accumulated reply (confirmed live: "...successfully created
+// the file.\nResume with -c (or command below):\nagy --conversation=..."),
+// since content-keyed dedup only skips lines already seen, never lines that
+// are simply not part of the conversation at all.
+const RESUME_COMMAND_LINE = /^Resume with -c\b|^agy --conversation=/i
 
 // CRITICAL (real bug fix — proven via static analysis of real captured agy
 // screen sequences gathered during this investigation): the old
@@ -424,6 +436,7 @@ export class AntigravityClassifier {
       if (trimmed === '') continue
       if (SEPARATOR_LINE.test(trimmed) || FOOTER_LINE.test(trimmed) || ECHO_LINE.test(trimmed)) continue
       if (BUSY_FOOTER_LINE.test(trimmed) || CSAT_SURVEY_LINE.test(trimmed) || GENERATING_LINE.test(trimmed)) continue
+      if (RESUME_COMMAND_LINE.test(trimmed)) continue
 
       // CRITICAL (real bug fix): combined into one check, and always resets
       // the flag — a standalone THOUGHT_SUBTITLE_LINE match must reset

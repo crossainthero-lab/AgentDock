@@ -214,6 +214,18 @@ export interface HandoffExecuteInput {
   additionalInstruction: string
 }
 
+/** `execute()` only ever CREATES the new session — it deliberately never
+ *  sends `prompt` itself (see handoff-service.ts's module comment for why:
+ *  a server-invented turnId the renderer never learns is the confirmed root
+ *  cause of a continued session's response rendering blank). The caller
+ *  sends `prompt` as this new session's first ordinary message, through the
+ *  exact same renderer-owned path (turnId included) every other prompt
+ *  uses. */
+export interface HandoffExecuteResult {
+  session: Session
+  prompt: string
+}
+
 /** Result of saving a picked/pasted/dropped image into a Codex session's
  *  persistent attachment storage. */
 export interface AttachmentSaveResult {

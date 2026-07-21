@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { getAgentDock } from '../../lib/agentDockClient'
 import { useAppState } from '../../state/AppStateContext'
 import { AGENT_DISPLAY_NAMES, AGENT_IDS, type AgentId, type Session } from '@shared/types'
+import { sendPrompt as sendConversationPrompt } from '../../state/conversationStore'
 import { Dialog } from '../ui/Dialog'
 import { Button } from '../ui/Button'
 import { Spinner } from '../ui/Spinner'
@@ -41,12 +42,19 @@ export function HandoffDialog({ open, onClose, sourceSession, onCompleted }: Han
   async function submit(): Promise<void> {
     setSubmitting(true)
     try {
-      const session = await getAgentDock().handoff.execute({
+      const { session, prompt } = await getAgentDock().handoff.execute({
         sourceSessionId: sourceSession.id,
         destinationAgentId: destination,
         summary,
         additionalInstruction: instruction
       })
+      // CRITICAL (real bug fix — see handoff-service.ts's module comment):
+      // the new session's first prompt is sent HERE, through the exact same
+      // turnId-owning path (conversationStore.sendPrompt) every other
+      // message in the app uses — never auto-sent server-side, which used
+      // to invent a turnId the renderer's reducer never learned and so
+      // rejected every event for it, rendering the response blank.
+      void sendConversationPrompt(session.id, session.agentId, prompt)
       await refreshSessions()
       onCompleted(session)
       onClose()

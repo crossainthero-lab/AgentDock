@@ -81,6 +81,11 @@ interface ConversationEntry {
   snapshot: SessionConversationState
   subscribers: Set<() => void>
   staleCheckTimer: ReturnType<typeof setInterval> | null
+  /** Bumped by notify() on every mutation to this entry — lets the one-time
+   *  persisted-history seed (see ensureTracked) detect whether anything
+   *  else has already touched this entry by the time its fetch resolves,
+   *  so it never blindly clobbers newer state with a stale snapshot. */
+  version: number
 }
 
 const entries = new Map<string, ConversationEntry>()
@@ -153,6 +158,7 @@ function pushTrace(entry: ConversationEntry, sessionId: string, trace: Omit<Trac
 }
 
 function notify(entry: ConversationEntry): void {
+  entry.version += 1
   entry.snapshot = toPublicState(entry)
   for (const cb of entry.subscribers) cb()
 }
@@ -193,11 +199,30 @@ function ensureTracked(sessionId: string): ConversationEntry {
     traces: [],
     snapshot: null as unknown as SessionConversationState,
     subscribers: new Set(),
-    staleCheckTimer: null
+    staleCheckTimer: null,
+    version: 0
   }
   entry.snapshot = toPublicState(entry)
   entries.set(sessionId, entry)
 
+  // CRITICAL (real bug fix — root cause of a continued session's response
+  // rendering blank even after handoff-service.ts's own turnId fix):
+  // sendPrompt() (see below) can call ensureTracked() and beginSend() on a
+  // BRAND NEW session before this fetch — kicked off for that very same
+  // first ensureTracked() call — has resolved. Since a fresh session has no
+  // persisted messages yet, that fetch resolves with an empty list; blindly
+  // applying it after beginSend() already opened a turn would silently wipe
+  // `reducer.turn` back to null (this is exactly what handoffService's own
+  // continuation flow does: HandoffDialog calls conversationStore.sendPrompt
+  // immediately after the session is created, well before SessionView ever
+  // mounts to seed it). Once `turn` is null, every event for that turn is
+  // rejected as stale_turn forever — indistinguishable, from the user's
+  // point of view, from the exact "blank response" bug this was meant to
+  // fix. Guarded by comparing `version` (bumped by every notify(), i.e. by
+  // any local send or live event) at fetch-start vs fetch-resolution: if it
+  // changed, something newer already happened and this snapshot is stale —
+  // apply the session metadata but skip clobbering `reducer`.
+  const versionAtSeedStart = entry.version
   void getAgentDock()
     .session.get(sessionId)
     .then((withMessages) => {
@@ -210,7 +235,9 @@ function ensureTracked(sessionId: string): ConversationEntry {
       }
       const { messages, ...s } = withMessages
       current.session = s
-      current.reducer = seedFromPersisted(messages)
+      if (current.version === versionAtSeedStart) {
+        current.reducer = seedFromPersisted(messages)
+      }
       current.loading = false
       notify(current)
     })

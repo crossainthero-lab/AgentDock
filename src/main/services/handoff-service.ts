@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto'
-import type { AgentId, HandoffExecuteInput, Session, SessionMessage } from '@shared/types'
+import type { AgentId, HandoffExecuteInput, HandoffExecuteResult, Session, SessionMessage } from '@shared/types'
 import { sessionRepo } from '../db/repositories/session-repo'
 import { messageRepo } from '../db/repositories/message-repo'
 import { workspaceRepo } from '../db/repositories/workspace-repo'
@@ -111,7 +110,34 @@ export const handoffService = {
     return capPayload(lines.join('\n').trim(), MAX_SUMMARY_CHARS)
   },
 
-  async execute(input: HandoffExecuteInput, onSessionCreated?: (session: Session) => void): Promise<Session> {
+  /**
+   * CRITICAL (real bug fix — root cause of the reported "continued agent
+   * response is blank" bug): this used to send the new session's first
+   * prompt itself, right here, via `sessionService.sendPrompt(newSession.id,
+   * prompt, randomUUID())` — inventing a turnId the renderer never learns.
+   * Every AgentEvent is turn-scoped (AgentEventReducer.isForActiveTurn
+   * requires `state.turn.id === event.turnId`), and `state.turn` is only
+   * ever populated by the renderer's OWN beginSend(), called from
+   * conversationStore.sendPrompt() right before the matching IPC call. A
+   * turn this function started server-side, with a turnId of its own
+   * invention, could therefore never have a matching local `turn` — so
+   * `isForActiveTurn` rejected every single event for it (deltas, activity,
+   * even the completion) as `stale_turn`, unconditionally, regardless of
+   * timing. The reply was still correctly persisted by session-service
+   * (messageRepo.add doesn't depend on the renderer at all), and the user's
+   * own continuation prompt was too — but the assistant's response never
+   * had anywhere to attach to live, and reseeding from the DB on the next
+   * mount only helps once the turn has actually finished, which loses the
+   * live streaming entirely and often loses the race against a still-in-
+   * flight turn too.
+   *
+   * Fixed structurally: this only ever CREATES the session and returns the
+   * constructed prompt text — never sends it. The caller (HandoffDialog)
+   * sends that exact text as the new session's first ordinary message,
+   * through conversationStore.sendPrompt(), the same turnId-owning path
+   * every other prompt in the app already uses correctly.
+   */
+  async execute(input: HandoffExecuteInput, onSessionCreated?: (session: Session) => void): Promise<HandoffExecuteResult> {
     const source = sessionRepo.get(input.sourceSessionId)
     if (!source) throw new Error('Session not found.')
 
@@ -129,9 +155,10 @@ export const handoffService = {
       titleSource: 'handoff',
       continuedFromSessionId: source.id
     })
-    // Give the caller a chance to wire event forwarding before sendPrompt
-    // starts emitting — otherwise the first few events could fire before
-    // any renderer subscription exists.
+    // Still useful even though this no longer sends anything itself — wires
+    // main-process event forwarding (see ipc/session.ts's ensureForwarding)
+    // before the renderer's own sendPrompt IPC call arrives, though that
+    // call wires it too (idempotent either way).
     onSessionCreated?.(newSession)
 
     // Bounded again here, independent of generateSummary's own cap — the
@@ -140,8 +167,7 @@ export const handoffService = {
     const boundedSummary = capPayload(input.summary.trim(), MAX_SUMMARY_CHARS)
     const prompt = buildContinuationPrompt(instruction, boundedSummary)
 
-    await sessionService.sendPrompt(newSession.id, prompt, randomUUID())
-    return newSession
+    return { session: newSession, prompt }
   }
 }
 

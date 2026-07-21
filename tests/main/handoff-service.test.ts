@@ -2,10 +2,19 @@
 // by a disposable temp userData dir) rather than mocking them out — the bug
 // this file verifies (recursive handoff-envelope duplication across a real
 // multi-hop chain) only actually shows up against genuine persisted
-// message history, the same way it did in the real reported incident. Only
-// `electron` (for app.getPath) and sessionService.sendPrompt (the actual
-// process-spawning side effect, irrelevant to what's being verified here)
-// are stubbed.
+// message history, the same way it did in the real reported incident.
+//
+// CRITICAL: handoffService.execute() deliberately never sends the new
+// session's first prompt itself anymore (see handoff-service.ts's module
+// comment — that used to invent a turnId the renderer's reducer never
+// learned, which is the confirmed root cause of a continued session's
+// response rendering blank). It only creates the session and returns the
+// prompt text; the real caller (HandoffDialog) sends it through
+// conversationStore.sendPrompt(), which is what actually persists it as
+// the new session's first user message. These tests simulate that one
+// real side effect (messageRepo.add of the returned prompt) themselves,
+// via sendAsIfFromRenderer() below, so excludeHandoffEnvelope's behavior
+// against genuine persisted history is still exercised faithfully.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -21,31 +30,28 @@ import { initDatabase, closeDatabase } from '../../src/main/db/database'
 import { workspaceRepo } from '../../src/main/db/repositories/workspace-repo'
 import { sessionRepo } from '../../src/main/db/repositories/session-repo'
 import { messageRepo } from '../../src/main/db/repositories/message-repo'
-import { sessionService } from '../../src/main/services/session-service'
 import { handoffService } from '../../src/main/services/handoff-service'
+import type { HandoffExecuteResult } from '../../src/shared/types'
 
 describe('handoffService — root-cause fix for recursive continuation duplication', () => {
   let workspaceId: string
-  let sendPromptSpy: ReturnType<typeof vi.spyOn>
-  let lastSentPrompt: string | null
+
+  /** Mirrors conversationStore.sendPrompt's real first side effect
+   *  (persisting the prompt as the new session's own first message) —
+   *  everything after that (spawning a real adapter) is irrelevant here. */
+  function sendAsIfFromRenderer(result: HandoffExecuteResult): HandoffExecuteResult {
+    messageRepo.add(result.session.id, 'user', { kind: 'text', text: result.prompt })
+    return result
+  }
 
   beforeEach(async () => {
     userDataDir = mkdtempSync(join(tmpdir(), 'agentdock-handoff-'))
     await initDatabase()
     workspaceId = workspaceRepo.upsert('C:\\project-pulse', 'Project Pulse').id
-    lastSentPrompt = null
-    sendPromptSpy = vi.spyOn(sessionService, 'sendPrompt').mockImplementation(async (sessionId, text) => {
-      lastSentPrompt = text
-      // Mirrors the real sendPrompt's own first side effect (persisting the
-      // prompt as this session's own first message) — everything after
-      // that (spawning a real adapter) is what's being stubbed out.
-      messageRepo.add(sessionId, 'user', { kind: 'text', text })
-    })
   })
 
   afterEach(() => {
     closeDatabase()
-    vi.restoreAllMocks()
     rmSync(userDataDir, { recursive: true, force: true })
   })
 
@@ -87,12 +93,14 @@ describe('handoffService — root-cause fix for recursive continuation duplicati
 
       // --- Hop 2: hand off to Codex ---
       const claudeSummary = handoffService.generateSummary(claudeSession.id)
-      const codexSession = await handoffService.execute({
-        sourceSessionId: claudeSession.id,
-        destinationAgentId: 'codex',
-        summary: claudeSummary,
-        additionalInstruction: 'add local persistence'
-      })
+      const { session: codexSession } = sendAsIfFromRenderer(
+        await handoffService.execute({
+          sourceSessionId: claudeSession.id,
+          destinationAgentId: 'codex',
+          summary: claudeSummary,
+          additionalInstruction: 'add local persistence'
+        })
+      )
       expect(codexSession.continuedFromSessionId).toBe(claudeSession.id)
       expect(codexSession.titleSource).toBe('handoff')
       expect(codexSession.title).toBe('Add local persistence (continued)')
@@ -117,12 +125,14 @@ describe('handoffService — root-cause fix for recursive continuation duplicati
       expect(codexSummary).toContain('Continuing from a Codex conversation')
 
       // --- Hop 3: hand off to Antigravity ---
-      const antigravitySession = await handoffService.execute({
-        sourceSessionId: codexSession.id,
-        destinationAgentId: 'antigravity',
-        summary: codexSummary,
-        additionalInstruction: 'add reset dashboard'
-      })
+      const { session: antigravitySession } = sendAsIfFromRenderer(
+        await handoffService.execute({
+          sourceSessionId: codexSession.id,
+          destinationAgentId: 'antigravity',
+          summary: codexSummary,
+          additionalInstruction: 'add reset dashboard'
+        })
+      )
       expect(antigravitySession.continuedFromSessionId).toBe(codexSession.id)
       expect(antigravitySession.title).toBe('Add reset dashboard (continued)')
       messageRepo.add(antigravitySession.id, 'assistant', { kind: 'text', text: 'Reset dashboard added.' })
@@ -140,21 +150,19 @@ describe('handoffService — root-cause fix for recursive continuation duplicati
     }
   )
 
-  it("the user's new instruction appears exactly once in the prompt actually delivered to the destination agent", async () => {
+  it("the user's new instruction appears exactly once in the prompt returned for the destination agent", async () => {
     const source = sessionRepo.create(workspaceId, 'claude-code', 'Build login', 'generated')
     messageRepo.add(source.id, 'user', { kind: 'text', text: 'Build login' })
     messageRepo.add(source.id, 'assistant', { kind: 'text', text: 'Done.' })
 
-    await handoffService.execute({
+    const { prompt } = await handoffService.execute({
       sourceSessionId: source.id,
       destinationAgentId: 'antigravity',
       summary: handoffService.generateSummary(source.id),
       additionalInstruction: 'add password reset'
     })
 
-    expect(sendPromptSpy).toHaveBeenCalledTimes(1)
-    expect(lastSentPrompt).not.toBeNull()
-    const occurrences = lastSentPrompt!.match(/add password reset/gi)?.length ?? 0
+    const occurrences = prompt.match(/add password reset/gi)?.length ?? 0
     expect(occurrences).toBe(1)
   })
 
@@ -238,7 +246,7 @@ describe('handoffService — root-cause fix for recursive continuation duplicati
     const source = sessionRepo.create(workspaceId, 'claude-code', 'Add reset dashboard', 'generated')
     messageRepo.add(source.id, 'user', { kind: 'text', text: 'Add reset dashboard' })
 
-    const next = await handoffService.execute({
+    const { session: next } = await handoffService.execute({
       sourceSessionId: source.id,
       destinationAgentId: 'codex',
       summary: handoffService.generateSummary(source.id),

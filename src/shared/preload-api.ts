@@ -14,6 +14,7 @@ import type {
   DiffResult,
   ExecutableTestResult,
   HandoffExecuteInput,
+  HandoffExecuteResult,
   LaunchTerminalResult,
   Session,
   SessionWithMessages,
@@ -214,7 +215,11 @@ export interface AgentDockApi {
   }
   handoff: {
     generateSummary(sessionId: string): Promise<string>
-    execute(input: HandoffExecuteInput): Promise<Session>
+    /** Only ever creates the new session — never sends its first prompt
+     *  itself (see handoff-service.ts's module comment). The caller sends
+     *  the returned `prompt` through the new session's own conversation
+     *  once it's tracked, the same way any other message is sent. */
+    execute(input: HandoffExecuteInput): Promise<HandoffExecuteResult>
   }
   windowCtl: {
     minimize(): void

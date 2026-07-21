@@ -290,4 +290,42 @@ describe('AntigravityClassifier (real captures from agy 1.1.1/1.1.2, -i <prompt>
     expect(events).toHaveLength(1)
     expect(events[0].type).toBe('permission_required')
   })
+
+  it('CRITICAL (real bug fix, found via a real captured process-exit sequence): never classifies agy\'s own "Resume with -c" shutdown chrome as part of the reply', () => {
+    // Real captured shape: TerminalSessionController emits one final
+    // snapshot when the PTY exits (see its own module comment), and if the
+    // process had already printed its graceful-shutdown banner by then,
+    // that banner is present in the buffer alongside the turn's real,
+    // already-displayed reply. Confirmed live: without this filter, the
+    // banner got appended straight onto the accumulated assistant text.
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('Create a file named hello.txt containing the word hello')
+    const events = classifier.classify(
+      snapshot([
+        '> Create a file named hello.txt containing the word hello',
+        '',
+        '▸ Thought for 5s, 275 tokens',
+        '  Prioritizing Tool Usage',
+        '  I have successfully created the file hello.txt containing the word "hello".',
+        '',
+        ' How\'s the CLI experience so far? Help us improve:',
+        ' [1] Good  [2] Fine  [3] Bad  [0] Skip',
+        '',
+        '? for shortcuts                                            Gemini 3.1 Pro · low',
+        '',
+        'Resume with -c (or command below):',
+        'agy --conversation=ac1ba0b0-c67a-4813-8bd0-1b86f8e1634d'
+      ])
+    )
+    const proseEvents = events.filter((e) => e.type === 'assistant_message')
+    expect(proseEvents).toEqual([
+      { type: 'assistant_message', text: 'I have successfully created the file hello.txt containing the word "hello".' }
+    ])
+    for (const e of proseEvents) {
+      if (e.type === 'assistant_message') {
+        expect(e.text).not.toContain('Resume with -c')
+        expect(e.text).not.toContain('agy --conversation=')
+      }
+    }
+  })
 })
