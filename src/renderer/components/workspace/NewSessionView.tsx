@@ -5,6 +5,7 @@ import { useAppState } from '../../state/AppStateContext'
 import { AGENT_DISPLAY_NAMES, AGENT_IDS, type AgentId } from '@shared/types'
 import { getAgentDock } from '../../lib/agentDockClient'
 import { Spinner } from '../ui/Spinner'
+import { Button } from '../ui/Button'
 import './NewSessionView.css'
 
 const AGENT_DESCRIPTIONS: Record<AgentId, string> = {
@@ -61,14 +62,19 @@ export function NewSessionView(): React.JSX.Element {
                 </div>
 
                 {installed ? (
-                  <button className="ad-agent-card__action" onClick={() => void startWith(agentId)} disabled={busy}>
+                  <Button
+                    variant="primary"
+                    className="ad-agent-card__action"
+                    onClick={() => void startWith(agentId)}
+                    disabled={busy}
+                  >
                     {busy ? <Spinner size={13} /> : <ArrowRight size={14} />}
                     Start with {AGENT_DISPLAY_NAMES[agentId]}
-                  </button>
+                  </Button>
                 ) : (
-                  <button className="ad-agent-card__settings-link" onClick={() => setSettingsViewOpen(true)}>
+                  <Button variant="ghost" className="ad-agent-card__action" onClick={() => setSettingsViewOpen(true)}>
                     Open Agent Settings
-                  </button>
+                  </Button>
                 )}
               </div>
             )

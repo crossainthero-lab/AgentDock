@@ -75,7 +75,7 @@ export function HandoffDialog({ open, onClose, sourceSession, onCompleted }: Han
       <div className="ad-handoff">
         <label className="ad-handoff__field">
           <span>Destination agent</span>
-          <select value={destination} onChange={(e) => setDestination(e.target.value as AgentId)}>
+          <select className="ad-select" value={destination} onChange={(e) => setDestination(e.target.value as AgentId)}>
             {AGENT_IDS.map((id) => (
               <option key={id} value={id}>
                 {AGENT_DISPLAY_NAMES[id]}

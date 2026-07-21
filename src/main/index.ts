@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
 import { initDatabase, closeDatabase } from './db/database'
 import { settingsService } from './services/settings-service'
@@ -26,6 +26,16 @@ if (!gotLock) {
 
 let mainWindow: BrowserWindow | null = null
 
+/** Matches tokens.css's --color-bg-app for the initial paint, before the
+ *  renderer loads — avoids a flash of the wrong theme's background on
+ *  startup. Reflects the user's persisted appearance choice, or the OS
+ *  theme when they've left it on 'system'. */
+function initialBackgroundColor(): string {
+  const appearance = settingsService.get().appearance
+  const dark = appearance === 'system' ? nativeTheme.shouldUseDarkColors : appearance === 'dark'
+  return dark ? '#17181c' : '#f5f6f8'
+}
+
 function createWindow(): void {
   const state = loadWindowState()
 
@@ -38,7 +48,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     frame: false,
-    backgroundColor: '#111214',
+    backgroundColor: initialBackgroundColor(),
     titleBarStyle: 'hidden',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

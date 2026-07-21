@@ -1,5 +1,5 @@
 import type React from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import './Menu.css'
 
@@ -27,6 +27,16 @@ interface MenuProps {
  *  visibility check. */
 export function Menu({ label, items, selectedId, selectedLabel, onSelect, disabled }: MenuProps): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open])
+
   if (items.length === 0) return null
 
   return (

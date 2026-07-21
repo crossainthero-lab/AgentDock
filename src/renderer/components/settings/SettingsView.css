@@ -1,7 +1,11 @@
 .ad-settings {
   display: flex;
   gap: var(--space-5);
-  min-height: 420px;
+  /* Sized to each tab's own content (not a fixed height shared by all tabs)
+   * so a short tab like Appearance doesn't inherit dead space reserved for
+   * a taller one like Agents — the dialog itself already caps how tall this
+   * can grow (see Dialog.css's max-height) and scrolls internally past it. */
+  min-height: 240px;
 }
 
 .ad-settings__nav {
@@ -58,7 +62,9 @@
   color: var(--color-text-secondary);
 }
 
-.ad-settings-field select,
+/* select uses the shared .ad-select class (see global.css) for a consistent
+ * dropdown-trigger look across the whole app — only the text input needs
+ * its own rule here. */
 .ad-settings-field input[type='text'] {
   background: var(--color-bg-app);
   border: 1px solid var(--color-border-strong);

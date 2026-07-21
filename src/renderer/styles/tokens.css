@@ -25,6 +25,35 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.18);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
+
+  /* Control sizing — every button/input/dropdown-trigger of a given size
+   * should measure the same, regardless of which component renders it. */
+  --control-height-sm: 26px;
+  --control-height-md: 30px;
+  --control-height-lg: 36px;
+
+  /* Icon sizes — paired with lucide-react's `size` prop so glyph weight
+   * stays consistent across controls of the same tier. */
+  --icon-size-sm: 13px;
+  --icon-size-md: 15px;
+  --icon-size-lg: 18px;
+
+  /* Z-index layers — one shared scale so stacking order between dropdowns,
+   * modals, the image viewer and toasts is a deliberate decision, not
+   * whatever number a component happened to pick. */
+  --z-dropdown-backdrop: 40;
+  --z-dropdown: 41;
+  --z-modal: 100;
+  --z-viewer: 200;
+  --z-toast: 300;
+
+  /* Per-agent identity colors — brand-associated, so deliberately constant
+   * across light/dark rather than theme tokens (same idea as language
+   * colors on a code-hosting site). Single source of truth for anywhere an
+   * agent needs a monogram/avatar tint. */
+  --color-agent-claude-code: #c96442;
+  --color-agent-codex: #3b6fe0;
+  --color-agent-antigravity: #6b6f79;
 }
 
 /* Dark palette — default */

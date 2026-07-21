@@ -1,11 +1,12 @@
 import type React from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FileDiff, ListTree, MoreHorizontal, RefreshCw, Square, Terminal, TerminalSquare, UserPlus } from 'lucide-react'
 import { AGENT_DISPLAY_NAMES } from '@shared/types'
 import type { AgentCapabilities, AgentModelOption, Session, SessionStatus } from '@shared/types'
 import { StatusDot } from '../ui/StatusDot'
 import { IconButton } from '../ui/IconButton'
 import { Menu } from '../ui/Menu'
+import { Button } from '../ui/Button'
 import './SessionHeader.css'
 
 interface SessionHeaderProps {
@@ -171,6 +172,15 @@ export function SessionHeader({
 }: SessionHeaderProps): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [showLegacyModels, setShowLegacyModels] = useState(false)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [menuOpen])
   const isClaude = session.agentId === 'claude-code'
   const isCodex = session.agentId === 'codex'
   const isAntigravity = session.agentId === 'antigravity'
@@ -235,13 +245,14 @@ export function SessionHeader({
           />
         )}
         {isCodex && legacyCodexModels.length > 0 && (
-          <button
-            className="ad-session-header__legacy-toggle"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setShowLegacyModels((v) => !v)}
             title={showLegacyModels ? 'Hide legacy Codex models' : `Show ${legacyCodexModels.length} legacy Codex model(s)`}
           >
             {showLegacyModels ? 'Hide legacy' : 'Show legacy'}
-          </button>
+          </Button>
         )}
         {isCodex && onRefreshModelCatalog && (
           <IconButton label="Refresh Codex model list" size="sm" onClick={onRefreshModelCatalog} disabled={refreshingModelCatalog}>
@@ -264,10 +275,10 @@ export function SessionHeader({
         )}
 
         {changedFileCount > 0 && (
-          <button className="ad-session-header__changes-btn" onClick={onOpenChanges}>
+          <Button variant="secondary" size="sm" onClick={onOpenChanges}>
             <FileDiff size={13} />
             {changedFileCount} file{changedFileCount === 1 ? '' : 's'} changed
-          </button>
+          </Button>
         )}
 
         {isBusy && (

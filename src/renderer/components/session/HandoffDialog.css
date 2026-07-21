@@ -12,7 +12,8 @@
   color: var(--color-text-secondary);
 }
 
-.ad-handoff__field select,
+/* select uses the shared .ad-select class (see global.css) — only the
+ * textarea needs its own rule here. */
 .ad-handoff__field textarea {
   background: var(--color-bg-app);
   border: 1px solid var(--color-border-strong);
@@ -23,7 +24,6 @@
   resize: vertical;
   font-family: inherit;
 }
-.ad-handoff__field select:focus,
 .ad-handoff__field textarea:focus {
   outline: none;
   border-color: var(--color-accent);

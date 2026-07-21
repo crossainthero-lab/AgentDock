@@ -179,6 +179,7 @@ export function AgentsSettings(): React.JSX.Element {
             <label className="ad-settings-field">
               <span className="ad-settings-field__label">Permission mode</span>
               <select
+                className="ad-select"
                 value={agentSettings?.permissionMode ?? 'default'}
                 onChange={(e) => void updateSettings({ agents: { [agentId]: { permissionMode: e.target.value } } })}
               >

@@ -4,8 +4,14 @@
   line-height: 1.65;
 }
 
-.ad-message--user {
+.ad-message--user-group {
   align-self: flex-end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.ad-message--user {
   background: var(--color-bg-selected);
   border-radius: var(--radius-lg);
   padding: 9px 13px;
@@ -60,6 +66,11 @@
   opacity: 0;
   transition: opacity var(--transition-fast);
   user-select: none;
+}
+
+.ad-message__toolbar--user {
+  justify-content: flex-end;
+  padding-right: 2px;
 }
 
 .ad-message--group:hover .ad-message__toolbar,

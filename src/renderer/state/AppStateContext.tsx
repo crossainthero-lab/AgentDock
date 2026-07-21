@@ -14,6 +14,7 @@ interface AppState {
 
   selectedSessionId: string | null
   selectSession: (id: string | null) => void
+  deleteSession: (id: string) => Promise<void>
 
   agents: AgentDetection[]
   agentsLoading: boolean
@@ -120,6 +121,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
     setSettings(updated)
   }, [])
 
+  const deleteSession = useCallback(
+    async (id: string) => {
+      await getAgentDock().session.delete(id)
+      setSelectedSessionId((current) => (current === id ? null : current))
+      await refreshSessions()
+    },
+    [refreshSessions]
+  )
+
   const value = useMemo<AppState>(
     () => ({
       workspace,
@@ -131,6 +141,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
       refreshSessions,
       selectedSessionId,
       selectSession: setSelectedSessionId,
+      deleteSession,
       agents,
       agentsLoading,
       refreshAgents,
@@ -150,6 +161,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
       sessionsLoading,
       refreshSessions,
       selectedSessionId,
+      deleteSession,
       agents,
       agentsLoading,
       refreshAgents,

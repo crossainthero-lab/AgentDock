@@ -26,10 +26,14 @@
 .ad-status-dot--exited {
   background: var(--color-danger);
 }
+/* Deliberately amber, not the accent blue "still working" uses — this is
+ * the one state that needs the USER to act, not the agent, and a glance at
+ * the sidebar (dot only, no status text there) must be able to tell the
+ * two apart. */
 .ad-status-dot--waiting_for_permission,
 .ad-status-dot--waiting_for_user {
-  background: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-bg-selected);
+  background: var(--color-warning);
+  box-shadow: 0 0 0 3px var(--color-warning-bg);
   animation: ad-pulse 1.6s ease-in-out infinite;
 }
 

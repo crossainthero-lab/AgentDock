@@ -118,19 +118,45 @@
 .ad-session-row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
   width: 100%;
   padding: 7px var(--space-2);
   border-radius: var(--radius-md);
   background: transparent;
-  text-align: left;
   transition: background var(--transition-fast);
 }
-.ad-session-row:hover {
+.ad-session-row:hover,
+.ad-session-row:focus-within {
   background: var(--color-bg-hover);
 }
 .ad-session-row--selected {
   background: var(--color-bg-selected);
+}
+
+.ad-session-row__select {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: var(--space-2);
+  background: transparent;
+  text-align: left;
+}
+
+/* Reserved space always, revealed on hover/focus so it never shifts the
+ * row's other content when it appears (same pattern as message toolbars). */
+.ad-session-row__delete {
+  flex-shrink: 0;
+  opacity: 0;
+  color: var(--color-text-tertiary);
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+.ad-session-row:hover .ad-session-row__delete,
+.ad-session-row__delete:focus-visible {
+  opacity: 1;
+}
+.ad-session-row__delete:hover {
+  color: var(--color-danger);
 }
 
 .ad-session-row__monogram {
@@ -147,13 +173,13 @@
   background: var(--color-text-tertiary);
 }
 .ad-session-row__monogram--claude-code {
-  background: #c96442;
+  background: var(--color-agent-claude-code);
 }
 .ad-session-row__monogram--codex {
-  background: #3b6fe0;
+  background: var(--color-agent-codex);
 }
 .ad-session-row__monogram--antigravity {
-  background: #6b6f79;
+  background: var(--color-agent-antigravity);
 }
 
 .ad-session-row__body {

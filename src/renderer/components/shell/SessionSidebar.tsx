@@ -1,6 +1,6 @@
 import type React from 'react'
 import { useMemo, useState } from 'react'
-import { ChevronsLeft, ChevronsRight, FolderOpen, Plus, Search } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, FolderOpen, Plus, Search, Trash2 } from 'lucide-react'
 import { useAppState } from '../../state/AppStateContext'
 import { AGENT_DISPLAY_NAMES } from '@shared/types'
 import { StatusDot } from '../ui/StatusDot'
@@ -13,9 +13,24 @@ function agentInitial(agentId: keyof typeof AGENT_DISPLAY_NAMES): string {
 }
 
 export function SessionSidebar(): React.JSX.Element {
-  const { workspace, sessions, sessionsLoading, selectedSessionId, selectSession, openWorkspace, sidebarCollapsed, toggleSidebar } =
-    useAppState()
+  const {
+    workspace,
+    sessions,
+    sessionsLoading,
+    selectedSessionId,
+    selectSession,
+    deleteSession,
+    openWorkspace,
+    sidebarCollapsed,
+    toggleSidebar
+  } = useAppState()
   const [query, setQuery] = useState('')
+
+  function handleDelete(e: React.MouseEvent, id: string, title: string): void {
+    e.stopPropagation()
+    if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) return
+    void deleteSession(id)
+  }
 
   const filtered = useMemo(() => {
     if (!query.trim()) return sessions
@@ -75,11 +90,11 @@ export function SessionSidebar(): React.JSX.Element {
         ) : (
           <ul className="ad-session-list">
             {filtered.map((session) => (
-              <li key={session.id}>
-                <button
-                  className={`ad-session-row${session.id === selectedSessionId ? ' ad-session-row--selected' : ''}`}
-                  onClick={() => selectSession(session.id)}
-                >
+              <li
+                key={session.id}
+                className={`ad-session-row${session.id === selectedSessionId ? ' ad-session-row--selected' : ''}`}
+              >
+                <button className="ad-session-row__select" onClick={() => selectSession(session.id)}>
                   <span className={`ad-session-row__monogram ad-session-row__monogram--${session.agentId}`}>
                     {agentInitial(session.agentId)}
                   </span>
@@ -87,8 +102,16 @@ export function SessionSidebar(): React.JSX.Element {
                     <span className="ad-session-row__title">{session.title}</span>
                     <span className="ad-session-row__meta">{relativeTime(session.updatedAt)}</span>
                   </span>
-                  <StatusDot status={session.status} />
                 </button>
+                <StatusDot status={session.status} />
+                <IconButton
+                  label="Delete session"
+                  size="sm"
+                  className="ad-session-row__delete"
+                  onClick={(e) => handleDelete(e, session.id, session.title)}
+                >
+                  <Trash2 size={13} />
+                </IconButton>
               </li>
             ))}
           </ul>

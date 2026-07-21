@@ -78,25 +78,42 @@ export function MessageBubble({
     )
   }
 
+  if (role === 'user') {
+    return (
+      <div className="ad-message ad-message--user-group ad-message--group">
+        <div className="ad-message--user">
+          {images && images.length > 0 && sessionId && (
+            <div className="ad-message__attachments">
+              {images.map((path) => (
+                <AttachmentThumbnail key={path} sessionId={sessionId} path={path} backend={attachmentBackend} />
+              ))}
+            </div>
+          )}
+          {text && <div className="ad-message__text ad-message__text--plain">{text}</div>}
+          {deliveryState === 'sending' && <div className="ad-message__delivery">Sending…</div>}
+          {deliveryState === 'failed' && (
+            <div className="ad-message__delivery ad-message__delivery--failed">
+              Not delivered.{' '}
+              <button className="ad-message__retry" onClick={onRetry}>
+                Retry
+              </button>
+            </div>
+          )}
+        </div>
+        {text && deliveryState !== 'sending' && deliveryState !== 'failed' && (
+          <div className="ad-message__toolbar ad-message__toolbar--user">
+            <CopyButton text={text} label="Copy" />
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // 'system' / 'approval' — rendered with the same plain (no-bubble) style as
+  // assistant text, since neither is a user-authored message needing a pill.
   return (
-    <div className={`ad-message ad-message--${role === 'user' ? 'user' : 'assistant'}`}>
-      {images && images.length > 0 && sessionId && (
-        <div className="ad-message__attachments">
-          {images.map((path) => (
-            <AttachmentThumbnail key={path} sessionId={sessionId} path={path} backend={attachmentBackend} />
-          ))}
-        </div>
-      )}
+    <div className="ad-message ad-message--assistant">
       {text && <div className="ad-message__text ad-message__text--plain">{text}</div>}
-      {deliveryState === 'sending' && <div className="ad-message__delivery">Sending…</div>}
-      {deliveryState === 'failed' && (
-        <div className="ad-message__delivery ad-message__delivery--failed">
-          Not delivered.{' '}
-          <button className="ad-message__retry" onClick={onRetry}>
-            Retry
-          </button>
-        </div>
-      )}
     </div>
   )
 }
