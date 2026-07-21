@@ -220,7 +220,7 @@ describe('handoffService — root-cause fix for recursive continuation duplicati
     })
 
     const summary = handoffService.generateSummary(session.id)
-    expect(summary).toContain('Issues encountered:')
+    expect(summary).toContain('Unresolved issues:')
     expect(summary).toContain('npm test failed')
   })
 
@@ -254,5 +254,137 @@ describe('handoffService — root-cause fix for recursive continuation duplicati
     })
 
     expect(next.title).toBe('Add reset dashboard (continued)')
+  })
+
+  describe('malformed/duplicated handoff prompt — real bug fix', () => {
+    /** Builds the exact final string a receiving agent would see — the
+     *  same construction HandoffDialog performs (instruction + generated
+     *  summary), letting these tests assert on the ACTUAL prompt text
+     *  delivered to the CLI, not just the summary fragment. */
+    async function buildHandoffPrompt(sourceSessionId: string, destinationAgentId: 'claude-code' | 'codex' | 'antigravity', instruction: string) {
+      const summary = handoffService.generateSummary(sourceSessionId)
+      const result = await handoffService.execute({ sourceSessionId, destinationAgentId, summary, additionalInstruction: instruction })
+      return sendAsIfFromRenderer(result)
+    }
+
+    function countOccurrences(haystack: string, needle: string): number {
+      return haystack.split(needle).length - 1
+    }
+
+    it('repeated identical tool actions (e.g. a retried failing command) are collapsed into one bullet with a count, never dumped verbatim N times', () => {
+      const session = sessionRepo.create(workspaceId, 'codex', 'Fix build', 'generated')
+      messageRepo.add(session.id, 'user', { kind: 'text', text: 'Fix the build' })
+      for (let i = 0; i < 4; i++) {
+        messageRepo.add(session.id, 'assistant', {
+          kind: 'activity',
+          tool: 'Bash',
+          summary: 'Bash failed',
+          detail: 'Bash(npm run build)',
+          isError: true
+        })
+      }
+      messageRepo.add(session.id, 'assistant', { kind: 'activity', tool: 'Bash', summary: 'Ran npm run build', detail: 'Bash(npm run build)', isError: false })
+
+      const summary = handoffService.generateSummary(session.id)
+      expect(countOccurrences(summary, 'Bash failed')).toBe(1)
+      expect(summary).toContain('Bash failed (failed 4 times)')
+    })
+
+    it('the current task (new instruction) appears exactly once, and the continuation header appears exactly once, in the final prompt sent to the destination agent', async () => {
+      const claudeSession = sessionRepo.create(workspaceId, 'claude-code', 'Add activity log', 'generated')
+      messageRepo.add(claudeSession.id, 'user', { kind: 'text', text: 'Create activity-log.txt' })
+      messageRepo.add(claudeSession.id, 'assistant', { kind: 'text', text: 'Done — created activity-log.txt.' })
+
+      const { session: codexSession, prompt: codexPrompt } = await buildHandoffPrompt(
+        claudeSession.id,
+        'codex',
+        'Append three status lines to activity-log.txt, one per PowerShell check.'
+      )
+
+      expect(countOccurrences(codexPrompt, 'Append three status lines to activity-log.txt')).toBe(1)
+      expect(countOccurrences(codexPrompt, '--- Continuation context ---')).toBe(1)
+      expect(countOccurrences(codexPrompt, 'Workspace:')).toBe(1)
+      // The current task must never reappear AFTER the continuation block
+      // (the exact reported failure shape: request, prior response, request
+      // again, continuation block again).
+      const contextIndex = codexPrompt.indexOf('--- Continuation context ---')
+      const taskIndexAfterContext = codexPrompt.indexOf('Append three status lines to activity-log.txt', contextIndex + 1)
+      expect(taskIndexAfterContext).toBe(-1)
+
+      messageRepo.add(codexSession.id, 'assistant', {
+        kind: 'activity',
+        tool: 'Edit',
+        summary: 'Ran Add-Content activity-log.txt',
+        detail: 'Add-Content activity-log.txt',
+        isError: false
+      })
+      messageRepo.add(codexSession.id, 'assistant', { kind: 'text', text: 'Appended the three status lines.' })
+
+      const { prompt: antigravityPrompt } = await buildHandoffPrompt(codexSession.id, 'antigravity', 'Add a final "Log complete." line.')
+
+      expect(countOccurrences(antigravityPrompt, 'Add a final "Log complete." line.')).toBe(1)
+      expect(countOccurrences(antigravityPrompt, '--- Continuation context ---')).toBe(1)
+      expect(countOccurrences(antigravityPrompt, 'Workspace:')).toBe(1)
+      // Never re-embeds the FIRST hop's own content (Claude's original ask)
+      // — proves the whole prompt isn't being duplicated end to end either.
+      expect(countOccurrences(antigravityPrompt, 'Create activity-log.txt')).toBe(0)
+    })
+
+    it('changed files appear exactly once even when the same file is touched by several activities', () => {
+      const session = sessionRepo.create(workspaceId, 'codex', 'Edit config', 'generated')
+      messageRepo.add(session.id, 'user', { kind: 'text', text: 'Update config.json twice' })
+      messageRepo.add(session.id, 'assistant', {
+        kind: 'activity',
+        tool: 'Edit',
+        summary: 'Ran Edit(config.json)',
+        detail: 'Edit(config.json)',
+        isError: false,
+        richDetail: { kind: 'file_change', changes: [{ path: 'config.json', kind: 'update' }] }
+      })
+      messageRepo.add(session.id, 'assistant', {
+        kind: 'activity',
+        tool: 'Edit',
+        summary: 'Ran Edit(config.json) again',
+        detail: 'Edit(config.json)',
+        isError: false,
+        richDetail: { kind: 'file_change', changes: [{ path: 'config.json', kind: 'update' }] }
+      })
+
+      const summary = handoffService.generateSummary(session.id)
+      const filesLine = summary.split('\n').find((l) => l.startsWith('Files changed:'))
+      expect(filesLine).toBeDefined()
+      // The file itself is listed once in the Files changed: line, even
+      // though two separate activities touched it (deduplicated by path,
+      // not merely truncated) — a real distinct action bullet describing
+      // each edit may still separately mention the same filename, which is
+      // not a duplication bug.
+      expect(filesLine?.match(/config\.json/g)?.length).toBe(1)
+    })
+
+    it('keeps overall prompt length reasonable even with many distinct actions and a long response', async () => {
+      const session = sessionRepo.create(workspaceId, 'codex', 'Big refactor', 'generated')
+      messageRepo.add(session.id, 'user', { kind: 'text', text: 'Refactor the whole module' })
+      for (let i = 0; i < 30; i++) {
+        messageRepo.add(session.id, 'assistant', {
+          kind: 'activity',
+          tool: 'Edit',
+          summary: `Ran Edit(src/file-${i}.ts)`,
+          detail: `Edit(src/file-${i}.ts)`,
+          isError: false
+        })
+      }
+      messageRepo.add(session.id, 'assistant', { kind: 'text', text: 'x'.repeat(2000) })
+
+      const { prompt } = await handoffService.execute({
+        sourceSessionId: session.id,
+        destinationAgentId: 'antigravity',
+        summary: handoffService.generateSummary(session.id),
+        additionalInstruction: 'Continue'
+      })
+
+      // Bounded regardless of how much raw activity/response text the
+      // source session accumulated — never an unbounded dump.
+      expect(prompt.length).toBeLessThan(5000)
+    })
   })
 })

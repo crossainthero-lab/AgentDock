@@ -47,6 +47,18 @@ export interface AgentTurn {
   status: TurnStatus
   startedAt: number
   completedAt?: number
+  /** Wall-clock time of the most recent event actually applied for this
+   *  turn (bumped in applyEnvelope, right before applyEvent runs) — never
+   *  regresses to startedAt on its own. This, not startedAt, is what
+   *  forceCompleteStaleTurn measures staleness against: a real, long-running
+   *  turn that keeps producing activity/deltas every so often must never be
+   *  force-completed out from under it just because its TOTAL duration
+   *  crossed a fixed threshold — only genuine silence (no events at all for
+   *  that long) means the process is actually wedged. See
+   *  forceCompleteStaleTurn's own doc comment for the full story (a real bug
+   *  this fixes: a long Codex turn that legitimately produced multiple
+   *  streamed updates over several minutes was being cut off mid-stream). */
+  lastEventAt: number
 }
 
 export type ChatItem =
@@ -216,7 +228,8 @@ export function beginSend(state: AgentEventReducerState, params: BeginSendParams
     sessionId: params.sessionId,
     userMessageId: params.userMessageId,
     status: 'submitted',
-    startedAt: now
+    startedAt: now,
+    lastEventAt: now
   }
   const userItem: ChatItem = {
     kind: 'user',
@@ -276,7 +289,8 @@ export function beginRetry(
     sessionId: params.sessionId,
     userMessageId: params.userMessageId,
     status: 'submitted',
-    startedAt: now
+    startedAt: now,
+    lastEventAt: now
   }
   return {
     ...state,
@@ -337,7 +351,14 @@ export function applyEnvelope(
     return { state: seen, accepted: false, reason: 'echo' }
   }
 
-  return { state: applyEvent(seen, event, now), accepted: true }
+  // Real, fresh evidence the agent is still alive and making progress —
+  // bumped for every accepted event, not just deltas, since a long turn can
+  // go quiet on text while still emitting activity (tool calls, reasoning
+  // steps). This is what forceCompleteStaleTurn measures against instead of
+  // startedAt (see AgentTurn.lastEventAt's doc comment).
+  const withFreshActivity = seen.turn ? { ...seen, turn: { ...seen.turn, lastEventAt: now } } : seen
+
+  return { state: applyEvent(withFreshActivity, event, now), accepted: true }
 }
 
 /** Transport-supplied ids (`messageId`/`activityId`) are only guaranteed
@@ -525,14 +546,29 @@ export function clearPendingInteraction(state: AgentEventReducerState): AgentEve
 }
 
 /** Fallback-only safety net (never the primary completion signal — that's
- *  turn_completed/turn_failed) for a turn that's been open implausibly long,
- *  e.g. a process that wedged without ever exiting cleanly. */
+ *  turn_completed/turn_failed) for a turn that's gone genuinely SILENT for
+ *  implausibly long — e.g. a process that wedged without ever exiting
+ *  cleanly.
+ *
+ *  CRITICAL (real bug fix): this used to measure elapsed time since
+ *  turn.startedAt — the turn's TOTAL duration — rather than since its most
+ *  recent activity. A real Codex turn given a task big enough to produce
+ *  several minutes' worth of streamed updates (multiple tool calls,
+ *  reasoning steps, deltas) was being force-failed mid-stream the moment its
+ *  total wall-clock age crossed maxAgeMs, even though it kept emitting
+ *  genuine events the entire time — after which every one of its real,
+ *  still-arriving events was rejected as stale_turn (the turn's status was
+ *  now 'failed'), so the response looked cut off and the user had to
+ *  manually ask the agent to continue. Measuring from lastEventAt instead
+ *  means only genuine SILENCE (no events at all) for maxAgeMs ever trips
+ *  this — a turn that keeps producing anything, however slowly, never gets
+ *  force-completed out from under it. */
 export function forceCompleteStaleTurn(state: AgentEventReducerState, maxAgeMs: number, now: number = Date.now()): AgentEventReducerState {
   if (!state.turn || state.turn.status === 'complete' || state.turn.status === 'failed') return state
   // A real pending permission/question can legitimately take longer than
   // the staleness window to answer — never force-fail out from under it.
   if (state.turn.status === 'awaiting_interaction') return state
-  if (now - state.turn.startedAt < maxAgeMs) return state
+  if (now - state.turn.lastEventAt < maxAgeMs) return state
   return {
     ...state,
     turn: { ...state.turn, status: 'failed', completedAt: now },
