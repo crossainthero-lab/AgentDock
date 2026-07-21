@@ -7,7 +7,25 @@ release/
 .DS_Store
 .env
 .env.local
+.env.*.local
 *.sqlite3
 *.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
 coverage/
 *.tsbuildinfo
+
+# Generated tool output (graphify skill knowledge-graph cache) — not project source
+graphify-out/
+
+# Disposable ad-hoc E2E/debug scripts and their artifacts, and Electron
+# test user-data directories, sometimes created at the repo root during
+# manual verification — never meant to be committed
+e2e-*.js
+inspect-db.js
+capture-agy*.js
+agy-raw-capture*.log
+*.playwright-artifacts/
+test-results/
+ad-e2e-*/
+
