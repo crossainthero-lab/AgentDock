@@ -423,6 +423,52 @@ describe('antigravityAdapter', () => {
     10000
   )
 
+  it(
+    'CRITICAL (real bug fix — confirmed root cause of a reported duplicated-handoff-prompt bug): a second send() ' +
+      '(e.g. a retry) arriving while still bootstrapping replaces the pending prompt instead of writing to the PTY a ' +
+      'second time — the process ends up receiving the prompt exactly once, never twice',
+    async () => {
+      const handle = antigravityAdapter.start(ctx)
+      const receivedEvents: AgentEvent[] = []
+      handle.onEvent((e) => receivedEvents.push(e))
+      const originalPrompt = 'add password reset\n\n--- Continuation context ---\nWorkspace: /tmp/project\n' + 'x'.repeat(600)
+      handle.send(originalPrompt, 't1')
+
+      expect(spawnCalls).toHaveLength(1)
+      const proc = spawnCalls[0].proc
+
+      // A retry (or any second send for this same still-bootstrapping
+      // process) arrives BEFORE the bare-spawned process has reached idle —
+      // e.g. a stale-turn misfire marked the first attempt failed while agy
+      // was still legitimately starting up.
+      const retryPrompt = originalPrompt.replace('add password reset', 'add password reset (retry)')
+      handle.send(retryPrompt, 't2')
+
+      // Still exactly one process — a retry reuses the same live PTY, it
+      // never spawns a second one.
+      expect(spawnCalls).toHaveLength(1)
+      // Nothing written yet — the process hasn't reached idle, so neither
+      // the original nor the retry prompt should have hit the PTY.
+      expect(proc.write).not.toHaveBeenCalled()
+
+      await feed(proc, '      ▄▀▀▄  Antigravity CLI 1.1.4\r\n⣷  Initializing...')
+      await feed(proc, IDLE_SCREEN)
+      expect(receivedEvents.some((e) => e.type === 'turn_completed')).toBe(false)
+
+      await new Promise((r) => setTimeout(r, 100))
+
+      // Exactly one write to the PTY, ever — using the RETRY's prompt (the
+      // latest one), never the stale original, and never both.
+      const promptWrites = proc.write.mock.calls.filter(
+        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('add password reset')
+      )
+      expect(promptWrites).toHaveLength(1)
+      expect(promptWrites[0][0]).toBe(`\x1b[200~${retryPrompt}\x1b[201~\r`)
+      expect(proc.write).not.toHaveBeenCalledWith(`\x1b[200~${originalPrompt}\x1b[201~\r`)
+    },
+    10000
+  )
+
   it('a short single-line prompt still spawns with -i (no unnecessary behavior change for the common case)', () => {
     const handle = antigravityAdapter.start(ctx)
     handle.send('fix the bug', 't1')

@@ -233,6 +233,28 @@ class AntigravityRunHandle implements AgentRunHandle {
     const hasImages = !!images && images.length > 0
 
     if (this.controller && this.controller.isRunning) {
+      // CRITICAL (real bug fix — confirmed root cause of a reported
+      // duplicated-handoff-prompt bug): a second send() can genuinely arrive
+      // for this same live process while the FIRST prompt hasn't actually
+      // been written to the PTY yet — e.g. a retry fired because an earlier
+      // stale-turn/timeout misfire (see AgentEventReducer's
+      // forceCompleteStaleTurn) marked the turn failed while agy was still
+      // legitimately bootstrapping (workspace-trust prompt, slow spawn) —
+      // bootstrappingFirstPrompt stays true across that whole window, right
+      // up until pasteImagesThenSend's own deferred write actually happens.
+      // Falling through to a normal write here would land a SECOND prompt
+      // on the PTY on top of that still-pending one — agy would receive and
+      // echo back the entire continuation prompt twice, back to back,
+      // exactly the reported "current request and Continuation context
+      // appeared twice" symptom. Only ever replace what's PENDING — never
+      // write twice — so the process ends up receiving exactly one prompt:
+      // this send()'s own, latest text.
+      if (this.bootstrappingFirstPrompt) {
+        console.log(`[antigravity] send() arrived for pid=${this.controller.pid} while still bootstrapping — replacing the pending prompt instead of writing again`)
+        this.pendingAttachPrompt = prompt
+        if (hasImages) this.pendingAttachImages = images as string[]
+        return
+      }
       console.log(`[antigravity] writing to existing pid=${this.controller.pid}`)
       this.classifier.beginTurn(prompt)
       if (hasImages) {

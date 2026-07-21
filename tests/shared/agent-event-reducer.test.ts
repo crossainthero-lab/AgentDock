@@ -344,6 +344,64 @@ describe('working / thinking state', () => {
     const afterTimeout = forceCompleteStaleTurn(state, 60_000, 999_999)
     expect(afterTimeout).toEqual(state)
   })
+
+  // CRITICAL (real bug fix): a real Codex turn given a big enough task can
+  // legitimately run for several minutes, producing activity/deltas the
+  // whole time — it must never be force-completed just because its TOTAL
+  // duration crosses the fallback threshold, only if it goes genuinely
+  // silent for that long. See forceCompleteStaleTurn's own doc comment.
+  it('a long-running turn that keeps producing real activity is never force-completed, no matter how old the turn itself is', () => {
+    let state = createReducerState()
+    state = send(state, 'go', 't1', 0)
+
+    // Activity keeps arriving every 50s — well within the 60s staleness
+    // window each time — for a turn whose TOTAL age eventually far exceeds
+    // that window.
+    state = applyEnvelope(state, envelope({ type: 'activity_started', activityId: 'a0', label: 'Bash(build)', tool: 'Bash' }, 1, 't1', 'e1'), 50_000).state
+    expect(forceCompleteStaleTurn(state, 60_000, 55_000).turn?.status).not.toBe('failed')
+
+    state = applyEnvelope(state, envelope({ type: 'activity_updated', activityId: 'a0', label: 'Bash(build)' }, 2, 't1', 'e2'), 100_000).state
+    expect(forceCompleteStaleTurn(state, 60_000, 105_000).turn?.status).not.toBe('failed')
+
+    state = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'still working' }, 3, 't1', 'e3'), 150_000).state
+    expect(forceCompleteStaleTurn(state, 60_000, 200_000).turn?.status).not.toBe('failed')
+    expect(forceCompleteStaleTurn(state, 60_000, 200_000).isBusy).toBe(true)
+
+    // Total elapsed time since the turn STARTED (0) is now 200s, well past
+    // the 60s threshold measured from start — proving this is genuinely
+    // measured from last activity, not from startedAt.
+    expect(200_000 - state.turn!.startedAt).toBeGreaterThan(60_000)
+  })
+
+  it('a turn that goes genuinely silent (no events at all) is still force-completed after the staleness window — the wedged-process safety net still works', () => {
+    let state = createReducerState()
+    state = send(state, 'go', 't1', 0)
+    state = applyEnvelope(state, envelope({ type: 'activity_started', activityId: 'a0', label: 'Bash(build)', tool: 'Bash' }, 1, 't1', 'e1'), 10_000).state
+
+    // No further events ever arrive — a real wedged/hung process.
+    const stillWithinLimit = forceCompleteStaleTurn(state, 60_000, 65_000)
+    expect(stillWithinLimit.turn?.status).not.toBe('failed')
+
+    const timedOut = forceCompleteStaleTurn(state, 60_000, 71_000)
+    expect(timedOut.turn?.status).toBe('failed')
+    expect(timedOut.isBusy).toBe(false)
+  })
+
+  it('remaining chunks after an incorrectly-considered completion are not silently rejected — completion only ever comes from a real terminal event once activity keeps the turn alive', () => {
+    let state = createReducerState()
+    state = send(state, 'go', 't1', 0)
+    state = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Part one. ' }, 1, 't1', 'e1'), 200_000).state
+    // The stale-turn safety net, checked periodically, must not have force-
+    // completed this turn given the fresh activity above — so a later real
+    // chunk for the SAME turn is still accepted.
+    state = forceCompleteStaleTurn(state, 60_000, 205_000)
+    expect(state.turn?.status).not.toBe('failed')
+
+    const result = applyEnvelope(state, envelope({ type: 'assistant_delta', messageId: 'm1', textDelta: 'Part two.' }, 2, 't1', 'e2'), 210_000)
+    expect(result.accepted).toBe(true)
+    const item = result.state.items.find((i) => i.kind === 'assistant')
+    expect(item).toMatchObject({ text: 'Part one. Part two.' })
+  })
 })
 
 describe('pending interactions', () => {
