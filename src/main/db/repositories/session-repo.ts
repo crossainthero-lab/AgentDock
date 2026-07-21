@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { getDatabase, persist } from '../database'
 import { all, get, run } from '../sqlite-adapter'
-import type { AgentId, Session, SessionStatus } from '@shared/types'
+import type { AgentId, Session, SessionStatus, TitleSource } from '@shared/types'
 
 interface SessionRow {
   id: string
   workspace_id: string
   agent_id: string
   title: string
+  title_source: string
+  continued_from_session_id: string | null
   status: string
   native_session_id: string | null
   created_at: string
@@ -20,6 +22,8 @@ function rowToSession(row: SessionRow): Session {
     workspaceId: row.workspace_id,
     agentId: row.agent_id as AgentId,
     title: row.title,
+    titleSource: row.title_source as TitleSource,
+    continuedFromSessionId: row.continued_from_session_id,
     status: row.status as SessionStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -27,21 +31,29 @@ function rowToSession(row: SessionRow): Session {
 }
 
 export const sessionRepo = {
-  create(workspaceId: string, agentId: AgentId, title: string): Session {
+  create(
+    workspaceId: string,
+    agentId: AgentId,
+    title: string,
+    titleSource: TitleSource = 'default',
+    continuedFromSessionId: string | null = null
+  ): Session {
     const now = new Date().toISOString()
     const session: Session = {
       id: randomUUID(),
       workspaceId,
       agentId,
       title,
+      titleSource,
+      continuedFromSessionId,
       status: 'idle',
       createdAt: now,
       updatedAt: now
     }
     run(
       getDatabase(),
-      `INSERT INTO sessions (id, workspace_id, agent_id, title, status, created_at, updated_at)
-       VALUES (@id, @workspaceId, @agentId, @title, @status, @createdAt, @updatedAt)`,
+      `INSERT INTO sessions (id, workspace_id, agent_id, title, title_source, continued_from_session_id, status, created_at, updated_at)
+       VALUES (@id, @workspaceId, @agentId, @title, @titleSource, @continuedFromSessionId, @status, @createdAt, @updatedAt)`,
       session
     )
     persist()
@@ -65,6 +77,18 @@ export const sessionRepo = {
   setStatus(id: string, status: SessionStatus): void {
     run(getDatabase(), 'UPDATE sessions SET status = @status, updated_at = @now WHERE id = @id', {
       status,
+      now: new Date().toISOString(),
+      id
+    })
+    persist()
+  },
+
+  /** `source` records how this new title came to be — see TitleSource's doc
+   *  comment for what governs whether it can ever be auto-changed again. */
+  setTitle(id: string, title: string, source: TitleSource): void {
+    run(getDatabase(), 'UPDATE sessions SET title = @title, title_source = @source, updated_at = @now WHERE id = @id', {
+      title,
+      source,
       now: new Date().toISOString(),
       id
     })

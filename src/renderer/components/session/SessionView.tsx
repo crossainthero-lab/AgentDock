@@ -1,5 +1,5 @@
 import type React from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppState } from '../../state/AppStateContext'
 import { useSessionConversation } from '../../state/useSessionConversation'
 import { getAgentDock } from '../../lib/agentDockClient'
@@ -14,7 +14,7 @@ import { TerminalDrawer } from '../drawers/TerminalDrawer'
 import './SessionView.css'
 
 export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Element | null {
-  const { workspace, agents, settings, updateSettings, selectSession } = useAppState()
+  const { agents, settings, updateSettings, selectSession, refreshSessions } = useAppState()
   const conversation = useSessionConversation(sessionId)
   const [changesOpen, setChangesOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
@@ -48,18 +48,39 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
     setActionError(`${action} failed: ${message}`)
   }
 
+  // CRITICAL (real bug fix, found via live testing): the sidebar's own
+  // session list is only ever (re)fetched by refreshSessions() — sending a
+  // prompt does not, on its own, notify AppStateContext that anything
+  // changed. Without this, a session's title (auto-generated from its
+  // first real prompt — see title-service.ts) and its status/"updated"
+  // timestamp were all correctly persisted server-side but silently never
+  // reflected in the sidebar until some unrelated action (delete/rename/
+  // opening a project) happened to trigger a refresh. Refreshing whenever a
+  // turn finishes (isBusy true -> false) keeps the sidebar honest without
+  // polling — a fresh title is knowable right after the first message is
+  // sent, but status/timestamp freshness needs the turn to actually settle.
+  const wasBusyRef = useRef(false)
   useEffect(() => {
-    if (!workspace || conversation.isBusy) return
+    if (wasBusyRef.current && !conversation.isBusy) {
+      void refreshSessions()
+    }
+    wasBusyRef.current = conversation.isBusy
+  }, [conversation.isBusy, refreshSessions])
+
+  const sessionWorkspaceId = conversation.session?.workspaceId ?? null
+
+  useEffect(() => {
+    if (!sessionWorkspaceId || conversation.isBusy) return
     let cancelled = false
     void getAgentDock()
-      .git.changedFiles(workspace.id)
+      .git.changedFiles(sessionWorkspaceId)
       .then((files) => {
         if (!cancelled) setChangedCount(files.length)
       })
     return () => {
       cancelled = true
     }
-  }, [workspace, conversation.isBusy])
+  }, [sessionWorkspaceId, conversation.isBusy])
 
   useEffect(() => {
     const agentId = conversation.session?.agentId
@@ -120,7 +141,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
     }
   }, [conversation.session?.agentId])
 
-  if (!workspace || !conversation.session) return null
+  if (!conversation.session) return null
 
   const session: Session = conversation.session
   const attachmentBackend: 'codex' | 'antigravity' = session.agentId === 'antigravity' ? 'antigravity' : 'codex'
@@ -272,7 +293,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
             conversation.retryMessage(userMessageId).catch((err) => reportActionError('Retry', err))
           }}
           onOpenTerminal={openTerminal}
-          workspaceId={workspace.id}
+          workspaceId={session.workspaceId}
           sessionId={sessionId}
           attachmentBackend={attachmentBackend}
         />
@@ -286,7 +307,14 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           sessionId={sessionId}
           onSend={(text, images) => {
             setActionError(null)
-            conversation.sendPrompt(text, images).catch((err) => reportActionError('Send', err))
+            conversation
+              .sendPrompt(text, images)
+              // Picks up a just-generated title (see title-service.ts)
+              // right away rather than waiting for the whole turn to
+              // finish — sendPrompt's own promise resolves as soon as the
+              // prompt is accepted, well before the agent is done.
+              .then(() => refreshSessions())
+              .catch((err) => reportActionError('Send', err))
           }}
           onInterrupt={() => {
             conversation.interrupt().catch((err) => reportActionError('Interrupt', err))
@@ -309,10 +337,10 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
         <ChangesDrawer
           open={changesOpen}
           onClose={() => setChangesOpen(false)}
-          workspaceId={workspace.id}
+          workspaceId={session.workspaceId}
           onChanged={() => {
             void getAgentDock()
-              .git.changedFiles(workspace.id)
+              .git.changedFiles(session.workspaceId)
               .then((files) => setChangedCount(files.length))
           }}
         />

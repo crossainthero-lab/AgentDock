@@ -14,16 +14,16 @@ const AGENT_DESCRIPTIONS: Record<AgentId, string> = {
   antigravity: "Google's Antigravity coding agent, run from its CLI in this project."
 }
 
-export function NewSessionView(): React.JSX.Element {
-  const { workspace, agents, agentsLoading, refreshAgents, refreshSessions, selectSession, setSettingsViewOpen } =
+export function NewSessionView({ projectId }: { projectId: string }): React.JSX.Element {
+  const { projects, agents, agentsLoading, refreshAgents, refreshSessions, selectSession, setSettingsViewOpen } =
     useAppState()
+  const project = projects.find((p) => p.id === projectId) ?? null
   const [startingAgent, setStartingAgent] = useState<AgentId | null>(null)
 
   async function startWith(agentId: AgentId): Promise<void> {
-    if (!workspace) return
     setStartingAgent(agentId)
     try {
-      const session = await getAgentDock().session.create({ workspaceId: workspace.id, agentId })
+      const session = await getAgentDock().session.create({ workspaceId: projectId, agentId })
       await refreshSessions()
       selectSession(session.id)
     } finally {
@@ -35,8 +35,8 @@ export function NewSessionView(): React.JSX.Element {
     <div className="ad-new-session">
       <div className="ad-new-session__inner">
         <div className="ad-new-session__heading">
-          <h1>{workspace?.name}</h1>
-          <p>Choose an agent to start a session in this project.</p>
+          <h1>{project?.name}</h1>
+          <p>Choose an agent to start a conversation in this project.</p>
         </div>
 
         <div className="ad-new-session__agents">

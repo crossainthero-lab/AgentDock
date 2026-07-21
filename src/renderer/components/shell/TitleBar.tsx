@@ -7,9 +7,22 @@ import { IconButton } from '../ui/IconButton'
 import './TitleBar.css'
 
 export function TitleBar(): React.JSX.Element {
-  const { workspace, setSettingsViewOpen } = useAppState()
+  const { workspace, projects, sessionsByProject, selectedSessionId, newSessionProjectId, setSettingsViewOpen } =
+    useAppState()
   const [isMaximized, setIsMaximized] = useState(false)
   const [branch, setBranch] = useState<string | null>(null)
+
+  // The project actually being looked at right now — the selected
+  // conversation's own project when one is open, otherwise whichever
+  // project's "choose an agent" screen is showing, otherwise the most
+  // recently active one. Never assumes the selected conversation belongs
+  // to `workspace` (the most-recent project), since with multiple projects
+  // visible at once it frequently won't.
+  const selectedSessionProjectId = selectedSessionId
+    ? Object.entries(sessionsByProject).find(([, sessions]) => sessions.some((s) => s.id === selectedSessionId))?.[0]
+    : undefined
+  const activeProjectId = selectedSessionProjectId ?? newSessionProjectId ?? workspace?.id ?? null
+  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null
 
   useEffect(() => {
     void getAgentDock().windowCtl.isMaximized().then(setIsMaximized)
@@ -17,29 +30,29 @@ export function TitleBar(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    if (!workspace) {
+    if (!activeProject) {
       setBranch(null)
       return
     }
     let cancelled = false
     void getAgentDock()
-      .git.branch(workspace.id)
+      .git.branch(activeProject.id)
       .then((b) => {
         if (!cancelled) setBranch(b)
       })
     return () => {
       cancelled = true
     }
-  }, [workspace])
+  }, [activeProject])
 
   return (
     <div className="ad-titlebar drag">
       <div className="ad-titlebar__left">
         <span className="ad-titlebar__logo">AgentDock</span>
-        {workspace && (
+        {activeProject && (
           <>
             <span className="ad-titlebar__sep">/</span>
-            <span className="ad-titlebar__project">{workspace.name}</span>
+            <span className="ad-titlebar__project">{activeProject.name}</span>
             {branch && (
               <span className="ad-titlebar__branch">
                 <GitBranch size={11} />

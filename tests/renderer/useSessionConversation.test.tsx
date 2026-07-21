@@ -5,6 +5,7 @@ import type { AgentDockApi, SessionEventPayload } from '../../src/shared/preload
 import type { AgentEvent } from '../../src/shared/events/agent-event'
 import type { SessionWithMessages } from '../../src/shared/types'
 import { useSessionConversation } from '../../src/renderer/state/useSessionConversation'
+import { __resetAllForTests } from '../../src/renderer/state/conversationStore'
 
 const SESSION_ID = 'session-1'
 
@@ -29,6 +30,7 @@ describe('useSessionConversation', () => {
   let deferredSend: { resolve: () => void; reject: (err: Error) => void } | null
 
   beforeEach(() => {
+    __resetAllForTests()
     eventListeners = new Set()
     attachCount = 0
     activeListenerCount = 0
@@ -84,16 +86,26 @@ describe('useSessionConversation', () => {
     for (const l of eventListeners) l(payload)
   }
 
-  it('attaches exactly one live listener at a time, even across a StrictMode double-mount', async () => {
+  it('attaches exactly one underlying event subscription per session, ever — including across StrictMode double-mount and a later remount (session switch back)', async () => {
     const { unmount } = renderHook(() => useSessionConversation(SESSION_ID), { wrapper: React.StrictMode })
 
     await waitFor(() => expect(activeListenerCount).toBe(1))
-    // StrictMode may have mounted/cleaned-up/remounted under the hood, but
-    // there must never be more than one *active* subscription at a time.
+    expect(attachCount).toBe(1)
+
+    // CRITICAL: unlike a plain component-scoped subscription, this one must
+    // survive the component unmounting — conversationStore.ts owns it for
+    // the session's whole life, not the component's, precisely so a turn
+    // that's still streaming when the user switches away never gets its
+    // remaining events silently dropped (see conversationStore.ts's module
+    // comment for the full bug this fixes).
+    unmount()
     expect(activeListenerCount).toBe(1)
 
-    unmount()
-    expect(activeListenerCount).toBe(0)
+    // Switching back to this same session (a fresh mount) must reuse the
+    // still-live entry rather than attaching a second underlying listener.
+    renderHook(() => useSessionConversation(SESSION_ID))
+    expect(attachCount).toBe(1)
+    expect(activeListenerCount).toBe(1)
   })
 
   it('shows the user message immediately — before the mocked IPC call ever resolves — and sends it exactly once', async () => {

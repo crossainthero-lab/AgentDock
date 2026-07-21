@@ -93,7 +93,14 @@ if (typeof window !== 'undefined' && !window.agentDock) {
         // not real project data.
         const path = '/preview/sample-project'
         const name = path.split(/[/\\]/).filter(Boolean).pop() ?? path
-        workspace = { id: 'mock-workspace', path, name, addedAt: new Date().toISOString(), lastOpenedAt: new Date().toISOString() }
+        workspace = {
+          id: 'mock-workspace',
+          path,
+          name,
+          addedAt: new Date().toISOString(),
+          lastOpenedAt: new Date().toISOString(),
+          collapsed: false
+        }
         return workspace
       },
       async list() {
@@ -104,6 +111,17 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       async close() {
         workspace = null
+      },
+      async rename(id, name) {
+        if (workspace && workspace.id === id) workspace = { ...workspace, name }
+        if (!workspace) throw new Error('Project not found.')
+        return workspace
+      },
+      async delete(id) {
+        if (workspace && workspace.id === id) workspace = null
+      },
+      async setCollapsed(id, collapsed) {
+        if (workspace && workspace.id === id) workspace = { ...workspace, collapsed }
       }
     },
     agents: {
@@ -195,6 +213,8 @@ if (typeof window !== 'undefined' && !window.agentDock) {
           workspaceId: input.workspaceId,
           agentId: input.agentId,
           title: input.title?.trim() || `New session`,
+          titleSource: input.titleSource ?? (input.title?.trim() ? 'manual' : 'default'),
+          continuedFromSessionId: input.continuedFromSessionId ?? null,
           status: 'idle',
           createdAt: now,
           updatedAt: now
@@ -231,6 +251,13 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       async delete(sessionId) {
         sessions.delete(sessionId)
         messages.delete(sessionId)
+      },
+      async rename(sessionId, title) {
+        const session = sessions.get(sessionId)
+        if (!session) throw new Error('Session not found.')
+        const updated: Session = { ...session, title: title.trim(), titleSource: 'manual' }
+        sessions.set(sessionId, updated)
+        return updated
       },
       onEvent(sessionId, cb) {
         const set = eventListeners.get(sessionId) ?? new Set()
@@ -328,6 +355,8 @@ if (typeof window !== 'undefined' && !window.agentDock) {
           workspaceId: source?.workspaceId ?? 'mock-workspace',
           agentId: input.destinationAgentId,
           title: `${source?.title ?? 'Session'} (continued)`,
+          titleSource: 'handoff',
+          continuedFromSessionId: input.sourceSessionId,
           status: 'idle',
           createdAt: now,
           updatedAt: now

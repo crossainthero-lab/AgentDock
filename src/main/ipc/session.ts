@@ -64,6 +64,7 @@ export function registerSessionIpc(window: BrowserWindow): void {
     sessionService.delete(sessionId)
     wired.delete(sessionId)
   })
+  ipcMain.handle(IpcChannels.sessionRename, (_event, sessionId: string, title: string) => sessionService.rename(sessionId, title))
 
   ipcMain.handle(
     IpcChannels.sessionRespondInteraction,

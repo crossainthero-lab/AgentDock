@@ -2,11 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent } from '../../src/shared/events/agent-event'
 import type { AgentDetection } from '../../src/shared/types'
 
+// titleSource defaults to 'manual' here specifically so the large majority
+// of tests below (which have nothing to do with titling) never trigger the
+// new title-generation-on-first-message path — see the dedicated "session
+// title generation" describe block for tests that explicitly opt in by
+// overriding it back to 'default'.
 const sessionRow = {
   id: 's1',
   workspaceId: 'w1',
   agentId: 'claude-code' as const,
   title: 't',
+  titleSource: 'manual' as 'default' | 'generated' | 'handoff' | 'manual',
+  continuedFromSessionId: null as string | null,
   status: 'idle' as const,
   createdAt: '',
   updatedAt: ''
@@ -15,14 +22,15 @@ const sessionRow = {
 // vi.mock factories are hoisted above all other top-level code (including
 // `const` declarations) — vi.hoisted() is required so this fn reference is
 // created before the hoisted mock factories below try to close over it.
-const { messageRepoAdd } = vi.hoisted(() => ({ messageRepoAdd: vi.fn() }))
+const { messageRepoAdd, sessionRepoSetTitle } = vi.hoisted(() => ({ messageRepoAdd: vi.fn(), sessionRepoSetTitle: vi.fn() }))
 
 vi.mock('../../src/main/db/repositories/session-repo', () => ({
   sessionRepo: {
     get: vi.fn(() => sessionRow),
     setStatus: vi.fn(),
     getNativeSessionId: vi.fn(() => null),
-    setNativeSessionId: vi.fn()
+    setNativeSessionId: vi.fn(),
+    setTitle: sessionRepoSetTitle
   }
 }))
 vi.mock('../../src/main/db/repositories/message-repo', () => ({
@@ -335,5 +343,59 @@ describe('sessionService.respondToInteraction — duplicate-submission preventio
 
     sessionService.respondToInteraction('s1', 'stale-id', '1')
     expect(fakeHandle.respondToInteraction).not.toHaveBeenCalled()
+  })
+})
+
+describe('sessionService.sendPrompt — automatic title generation on the first message', () => {
+  beforeEach(() => {
+    fakeHandle = makeFakeHandle()
+    messageRepoAdd.mockClear()
+    sessionRepoSetTitle.mockClear()
+    sessionRow.titleSource = 'manual'
+  })
+
+  it('generates a real title from the first prompt when the session is still on the generic placeholder', async () => {
+    sessionRow.titleSource = 'default'
+    await sessionService.sendPrompt('s1', 'Build Project Pulse', 't1')
+    expect(sessionRepoSetTitle).toHaveBeenCalledWith('s1', 'Build Project Pulse', 'generated')
+  })
+
+  it('never regenerates a title once it has already been auto-generated ("generated" is not "default")', async () => {
+    sessionRow.titleSource = 'generated'
+    await sessionService.sendPrompt('s1', 'A completely different message', 't1')
+    expect(sessionRepoSetTitle).not.toHaveBeenCalled()
+  })
+
+  it('never overwrites a manually-renamed title', async () => {
+    sessionRow.titleSource = 'manual'
+    await sessionService.sendPrompt('s1', 'Some new message', 't1')
+    expect(sessionRepoSetTitle).not.toHaveBeenCalled()
+  })
+
+  it('never overwrites a handoff-assigned title', async () => {
+    sessionRow.titleSource = 'handoff'
+    await sessionService.sendPrompt('s1', 'Some new message', 't1')
+    expect(sessionRepoSetTitle).not.toHaveBeenCalled()
+  })
+
+  it('leaves the generic placeholder in place when nothing meaningful can be derived from the prompt', async () => {
+    sessionRow.titleSource = 'default'
+    await sessionService.sendPrompt('s1', '??', 't1')
+    expect(sessionRepoSetTitle).not.toHaveBeenCalled()
+  })
+})
+
+describe('sessionService.rename', () => {
+  beforeEach(() => {
+    sessionRow.titleSource = 'manual'
+  })
+
+  it('sets titleSource to manual, permanently protecting it from automatic titling', () => {
+    sessionService.rename('s1', '  My Own Title  ')
+    expect(sessionRepoSetTitle).toHaveBeenCalledWith('s1', 'My Own Title', 'manual')
+  })
+
+  it('rejects an empty title rather than silently clearing it', () => {
+    expect(() => sessionService.rename('s1', '   ')).toThrow()
   })
 })

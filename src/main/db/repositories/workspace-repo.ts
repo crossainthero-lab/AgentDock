@@ -9,6 +9,7 @@ interface WorkspaceRow {
   name: string
   added_at: string
   last_opened_at: string
+  collapsed: number
 }
 
 function rowToWorkspace(row: WorkspaceRow): Workspace {
@@ -17,7 +18,8 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     path: row.path,
     name: row.name,
     addedAt: row.added_at,
-    lastOpenedAt: row.last_opened_at
+    lastOpenedAt: row.last_opened_at,
+    collapsed: !!row.collapsed
   }
 }
 
@@ -40,10 +42,11 @@ export const workspaceRepo = {
       persist()
       return { ...existing, lastOpenedAt: now }
     }
-    const workspace: Workspace = { id: randomUUID(), path, name, addedAt: now, lastOpenedAt: now }
+    const workspace: Workspace = { id: randomUUID(), path, name, addedAt: now, lastOpenedAt: now, collapsed: false }
     run(
       getDatabase(),
-      'INSERT INTO workspaces (id, path, name, added_at, last_opened_at) VALUES (@id, @path, @name, @addedAt, @lastOpenedAt)',
+      `INSERT INTO workspaces (id, path, name, added_at, last_opened_at, collapsed)
+       VALUES (@id, @path, @name, @addedAt, @lastOpenedAt, 0)`,
       workspace
     )
     persist()
@@ -61,5 +64,22 @@ export const workspaceRepo = {
   get(id: string): Workspace | null {
     const row = get<WorkspaceRow>(getDatabase(), 'SELECT * FROM workspaces WHERE id = @id', { id })
     return row ? rowToWorkspace(row) : null
+  },
+
+  rename(id: string, name: string): void {
+    run(getDatabase(), 'UPDATE workspaces SET name = @name WHERE id = @id', { name, id })
+    persist()
+  },
+
+  setCollapsed(id: string, collapsed: boolean): void {
+    run(getDatabase(), 'UPDATE workspaces SET collapsed = @collapsed WHERE id = @id', { collapsed: collapsed ? 1 : 0, id })
+    persist()
+  },
+
+  /** Cascades to every session (and, via sessions' own FK, every message) in
+   *  this project — the schema's ON DELETE CASCADE does the real work. */
+  delete(id: string): void {
+    run(getDatabase(), 'DELETE FROM workspaces WHERE id = @id', { id })
+    persist()
   }
 }

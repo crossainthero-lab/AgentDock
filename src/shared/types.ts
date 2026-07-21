@@ -42,7 +42,17 @@ export interface Workspace {
   name: string
   addedAt: string
   lastOpenedAt: string
+  /** Sidebar project-group expand/collapse state — persisted so it survives
+   *  a restart, same as everything else about a project. */
+  collapsed: boolean
 }
+
+/** How a session's `title` got its current value — governs whether
+ *  automatic title generation is still allowed to touch it. 'default' is
+ *  the only state eligible for one-time auto-generation from the first real
+ *  prompt (see title-service.ts); every other state is permanently
+ *  protected from being overwritten by anything automatic. */
+export type TitleSource = 'default' | 'generated' | 'handoff' | 'manual'
 
 export type SessionStatus =
   | 'idle'
@@ -59,6 +69,10 @@ export interface Session {
   workspaceId: string
   agentId: AgentId
   title: string
+  titleSource: TitleSource
+  /** The session this one was created from via "Continue with another
+   *  agent", if any — never mutated after creation. */
+  continuedFromSessionId: string | null
   status: SessionStatus
   createdAt: string
   updatedAt: string
@@ -119,6 +133,12 @@ export interface CreateSessionInput {
   workspaceId: string
   agentId: AgentId
   title?: string
+  /** Defaults to 'default' (the generic placeholder title, eligible for
+   *  one-time auto-generation) when omitted. Callers that already computed
+   *  a real title up front — namely handoff-service — pass 'handoff' so it
+   *  is never regenerated or overwritten. */
+  titleSource?: TitleSource
+  continuedFromSessionId?: string | null
 }
 
 export type ChangedFileStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'

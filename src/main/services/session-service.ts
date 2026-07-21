@@ -11,6 +11,7 @@ import type { ProcessExitInfo } from './pty-service'
 import { settingsService } from './settings-service'
 import { detectionService } from './detection-service'
 import { launchExternalTerminal } from './external-terminal-service'
+import { deriveTitleFromPrompt } from './title-service'
 
 interface RunningSession {
   handle: AgentRunHandle
@@ -72,7 +73,17 @@ function trace(sessionId: string, entry: Omit<TraceEvent, 'sessionId' | 'timesta
 export const sessionService = {
   create(input: CreateSessionInput): Session {
     const title = input.title?.trim() || `New ${agentDisplay(input.agentId)} session`
-    return sessionRepo.create(input.workspaceId, input.agentId, title)
+    const titleSource = input.titleSource ?? (input.title?.trim() ? 'manual' : 'default')
+    return sessionRepo.create(input.workspaceId, input.agentId, title, titleSource, input.continuedFromSessionId ?? null)
+  },
+
+  rename(sessionId: string, title: string): Session {
+    const trimmed = title.trim()
+    if (!trimmed) throw new Error('A conversation title cannot be empty.')
+    sessionRepo.setTitle(sessionId, trimmed, 'manual')
+    const session = sessionRepo.get(sessionId)
+    if (!session) throw new Error('Session not found.')
+    return session
   },
 
   list(workspaceId: string): Session[] {
@@ -91,6 +102,15 @@ export const sessionService = {
     }
     const session = sessionRepo.get(sessionId)
     if (!session) throw new Error('Session not found.')
+
+    // One-time, best-effort — only while the title is still the untouched
+    // generic placeholder (see TitleSource's doc comment). A derivation
+    // failure (no meaningful text to extract from, e.g. a bare "hi") just
+    // leaves the placeholder in place rather than blocking the send.
+    if (session.titleSource === 'default') {
+      const derived = deriveTitleFromPrompt(text)
+      if (derived) sessionRepo.setTitle(sessionId, derived, 'generated')
+    }
 
     messageRepo.add(sessionId, 'user', { kind: 'text', text, images: images && images.length > 0 ? images : undefined })
     sessionRepo.setStatus(sessionId, 'running')

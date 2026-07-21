@@ -7,4 +7,9 @@ export function registerWorkspaceIpc(window: BrowserWindow): void {
   ipcMain.handle(IpcChannels.workspaceList, () => workspaceService.list())
   ipcMain.handle(IpcChannels.workspaceGetCurrent, () => workspaceService.getCurrent())
   ipcMain.handle(IpcChannels.workspaceClose, () => workspaceService.close())
+  ipcMain.handle(IpcChannels.workspaceRename, (_event, id: string, name: string) => workspaceService.rename(id, name))
+  ipcMain.handle(IpcChannels.workspaceDelete, (_event, id: string) => workspaceService.delete(id))
+  ipcMain.handle(IpcChannels.workspaceSetCollapsed, (_event, id: string, collapsed: boolean) =>
+    workspaceService.setCollapsed(id, collapsed)
+  )
 }

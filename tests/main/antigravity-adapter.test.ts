@@ -395,6 +395,40 @@ describe('antigravityAdapter', () => {
     expect(proc.write).toHaveBeenCalledWith('describe this\r')
   }, 10000)
 
+  it(
+    'CRITICAL (real bug fix): a long/multi-line prompt (e.g. a continuation-handoff prompt) is spawned bare and ' +
+      'delivered via bracketed-paste stdin, never as a raw -i argv value — proven root cause of a real Antigravity ' +
+      'continuation failure (Windows argv/ConPTY quoting corrupting a large multi-line prompt)',
+    async () => {
+      const handle = antigravityAdapter.start(ctx)
+      const receivedEvents: AgentEvent[] = []
+      handle.onEvent((e) => receivedEvents.push(e))
+      const longPrompt = 'add password reset\n\n--- Continuation context ---\nWorkspace: /tmp/project\n' + 'x'.repeat(600)
+      handle.send(longPrompt, 't1')
+
+      expect(spawnCalls).toHaveLength(1)
+      // No -i at all — argv never carries the prompt text for this path.
+      expect(spawnCalls[0].args).toEqual(['--add-dir', '/tmp/project'])
+
+      const proc = spawnCalls[0].proc
+      await feed(proc, '      ▄▀▀▄  Antigravity CLI 1.1.4\r\n⣷  Initializing...')
+      await feed(proc, IDLE_SCREEN)
+      expect(receivedEvents.some((e) => e.type === 'turn_completed')).toBe(false)
+
+      await new Promise((r) => setTimeout(r, 100))
+      // Delivered via bracketed paste (the same safe mechanism as follow-up
+      // turns on an already-live process), never as a bare argv element.
+      expect(proc.write).toHaveBeenCalledWith(`\x1b[200~${longPrompt}\x1b[201~\r`)
+    },
+    10000
+  )
+
+  it('a short single-line prompt still spawns with -i (no unnecessary behavior change for the common case)', () => {
+    const handle = antigravityAdapter.start(ctx)
+    handle.send('fix the bug', 't1')
+    expect(spawnCalls[0].args).toEqual(['--add-dir', '/tmp/project', '-i', 'fix the bug'])
+  })
+
   it('skips an unreadable attachment with a warning instead of hanging, and still sends the text', async () => {
     const handle = antigravityAdapter.start(ctx)
     handle.send('first turn', 't1')

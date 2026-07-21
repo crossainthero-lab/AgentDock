@@ -1,20 +1,41 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { getAgentDock } from '../lib/agentDockClient'
 import type { AgentDetection, Session, Settings, Workspace } from '@shared/types'
+import { forget as forgetConversation } from './conversationStore'
 
 interface AppState {
+  /** The most recently active project — `projects[0]` (the list is always
+   *  ordered most-recently-opened first), never a separate stateful
+   *  pointer. Used as the sensible default when no project/session has
+   *  been explicitly picked yet (e.g. right after launch). */
   workspace: Workspace | null
   workspaceLoading: boolean
   openWorkspace: () => Promise<void>
   closeWorkspace: () => Promise<void>
 
-  sessions: Session[]
-  sessionsLoading: boolean
+  /** Every known project, shown simultaneously in the sidebar — not just
+   *  whichever one was opened last. */
+  projects: Workspace[]
+  projectsLoading: boolean
+  /** Each project's own conversation list, keyed by project id. */
+  sessionsByProject: Record<string, Session[]>
   refreshSessions: () => Promise<void>
+  renameProject: (id: string, name: string) => Promise<void>
+  deleteProject: (id: string) => Promise<void>
+  toggleProjectCollapsed: (id: string) => Promise<void>
 
   selectedSessionId: string | null
   selectSession: (id: string | null) => void
   deleteSession: (id: string) => Promise<void>
+  renameSession: (id: string, title: string) => Promise<void>
+
+  /** Which project the "choose an agent" screen (NewSessionView) is
+   *  currently scoped to — set explicitly by a project's own "+ New
+   *  session" action in the sidebar, so a new conversation always lands in
+   *  the project the user actually clicked, not whichever one happens to
+   *  be `workspace`. */
+  newSessionProjectId: string | null
+  startNewSessionInProject: (projectId: string) => void
 
   agents: AgentDetection[]
   agentsLoading: boolean
@@ -33,12 +54,12 @@ interface AppState {
 const AppStateCtx = createContext<AppState | null>(null)
 
 export function AppStateProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const [workspace, setWorkspace] = useState<Workspace | null>(null)
-  const [workspaceLoading, setWorkspaceLoading] = useState(true)
+  const [projects, setProjects] = useState<Workspace[]>([])
+  const [projectsLoading, setProjectsLoading] = useState(true)
+  const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({})
 
-  const [sessions, setSessions] = useState<Session[]>([])
-  const [sessionsLoading, setSessionsLoading] = useState(false)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const [newSessionProjectId, setNewSessionProjectId] = useState<string | null>(null)
 
   const [agents, setAgents] = useState<AgentDetection[]>([])
   const [agentsLoading, setAgentsLoading] = useState(true)
@@ -48,19 +69,19 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
+  const workspace = projects[0] ?? null
+
   const refreshSessions = useCallback(async () => {
-    if (!workspace) {
-      setSessions([])
-      return
-    }
-    setSessionsLoading(true)
+    setProjectsLoading(true)
     try {
-      const list = await getAgentDock().session.list(workspace.id)
-      setSessions(list)
+      const list = await getAgentDock().workspace.list()
+      setProjects(list)
+      const entries = await Promise.all(list.map(async (p) => [p.id, await getAgentDock().session.list(p.id)] as const))
+      setSessionsByProject(Object.fromEntries(entries))
     } finally {
-      setSessionsLoading(false)
+      setProjectsLoading(false)
     }
-  }, [workspace])
+  }, [])
 
   const refreshAgents = useCallback(async () => {
     setAgentsLoading(true)
@@ -78,23 +99,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
   }, [])
 
   useEffect(() => {
-    void (async () => {
-      setWorkspaceLoading(true)
-      try {
-        const current = await getAgentDock().workspace.getCurrent()
-        setWorkspace(current)
-      } finally {
-        setWorkspaceLoading(false)
-      }
-    })()
+    void refreshSessions()
     void refreshAgents()
     void refreshSettings()
-  }, [refreshAgents, refreshSettings])
-
-  useEffect(() => {
-    void refreshSessions()
-    setSelectedSessionId(null)
-  }, [workspace, refreshSessions])
+  }, [refreshSessions, refreshAgents, refreshSettings])
 
   useEffect(() => {
     if (!settings) return
@@ -108,13 +116,44 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
 
   const openWorkspace = useCallback(async () => {
     const opened = await getAgentDock().workspace.open()
-    if (opened) setWorkspace(opened)
-  }, [])
+    if (!opened) return
+    await refreshSessions()
+    setNewSessionProjectId(opened.id)
+    setSelectedSessionId(null)
+  }, [refreshSessions])
 
   const closeWorkspace = useCallback(async () => {
     await getAgentDock().workspace.close()
-    setWorkspace(null)
   }, [])
+
+  const renameProject = useCallback(
+    async (id: string, name: string) => {
+      await getAgentDock().workspace.rename(id, name)
+      await refreshSessions()
+    },
+    [refreshSessions]
+  )
+
+  const deleteProject = useCallback(
+    async (id: string) => {
+      await getAgentDock().workspace.delete(id)
+      setSelectedSessionId((current) => {
+        const stillExists = current ? (sessionsByProject[id] ?? []).every((s) => s.id !== current) : true
+        return stillExists ? current : null
+      })
+      if (newSessionProjectId === id) setNewSessionProjectId(null)
+      await refreshSessions()
+    },
+    [refreshSessions, sessionsByProject, newSessionProjectId]
+  )
+
+  const toggleProjectCollapsed = useCallback(async (id: string) => {
+    const target = projects.find((p) => p.id === id)
+    if (!target) return
+    const collapsed = !target.collapsed
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, collapsed } : p)))
+    await getAgentDock().workspace.setCollapsed(id, collapsed)
+  }, [projects])
 
   const updateSettings = useCallback(async (patch: Parameters<AppState['updateSettings']>[0]) => {
     const updated = await getAgentDock().settings.update(patch)
@@ -124,24 +163,50 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
   const deleteSession = useCallback(
     async (id: string) => {
       await getAgentDock().session.delete(id)
+      forgetConversation(id)
       setSelectedSessionId((current) => (current === id ? null : current))
       await refreshSessions()
     },
     [refreshSessions]
   )
 
+  const renameSession = useCallback(
+    async (id: string, title: string) => {
+      await getAgentDock().session.rename(id, title)
+      await refreshSessions()
+    },
+    [refreshSessions]
+  )
+
+  const startNewSessionInProject = useCallback((projectId: string) => {
+    setNewSessionProjectId(projectId)
+    setSelectedSessionId(null)
+  }, [])
+
+  const selectSession = useCallback((id: string | null) => {
+    setSelectedSessionId(id)
+    if (id) setNewSessionProjectId(null)
+  }, [])
+
   const value = useMemo<AppState>(
     () => ({
       workspace,
-      workspaceLoading,
+      workspaceLoading: projectsLoading,
       openWorkspace,
       closeWorkspace,
-      sessions,
-      sessionsLoading,
+      projects,
+      projectsLoading,
+      sessionsByProject,
       refreshSessions,
+      renameProject,
+      deleteProject,
+      toggleProjectCollapsed,
       selectedSessionId,
-      selectSession: setSelectedSessionId,
+      selectSession,
       deleteSession,
+      renameSession,
+      newSessionProjectId,
+      startNewSessionInProject,
       agents,
       agentsLoading,
       refreshAgents,
@@ -154,14 +219,21 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
     }),
     [
       workspace,
-      workspaceLoading,
+      projectsLoading,
       openWorkspace,
       closeWorkspace,
-      sessions,
-      sessionsLoading,
+      projects,
+      sessionsByProject,
       refreshSessions,
+      renameProject,
+      deleteProject,
+      toggleProjectCollapsed,
       selectedSessionId,
+      selectSession,
       deleteSession,
+      renameSession,
+      newSessionProjectId,
+      startNewSessionInProject,
       agents,
       agentsLoading,
       refreshAgents,

@@ -41,30 +41,6 @@
   background: var(--color-bg-hover);
 }
 
-.ad-sidebar__new-session {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  margin: 0 var(--space-3) var(--space-3);
-  padding: 7px 10px;
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  border-radius: var(--radius-md);
-  font-size: 12.5px;
-  font-weight: 500;
-  transition:
-    background var(--transition-fast),
-    opacity var(--transition-fast);
-}
-.ad-sidebar__new-session:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-}
-.ad-sidebar__new-session:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
 .ad-sidebar__search {
   display: flex;
   align-items: center;
@@ -105,11 +81,91 @@
   color: var(--color-text-tertiary);
   text-align: center;
 }
+.ad-sidebar__hint--nested {
+  padding: 4px var(--space-3) var(--space-2) 30px;
+  text-align: left;
+}
+
+.ad-project-group {
+  margin-bottom: 2px;
+}
+
+.ad-project-group__header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+  border-radius: var(--radius-sm);
+}
+.ad-project-group__header:hover {
+  background: var(--color-bg-hover);
+}
+
+.ad-project-group__toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.ad-project-group__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.ad-project-group__count {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--color-text-tertiary);
+}
+
+.ad-project-group__actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.ad-project-group__header:hover .ad-project-group__actions,
+.ad-project-group__actions:focus-within {
+  opacity: 1;
+}
+
+.ad-project-group__rename-input,
+.ad-session-row__rename-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-height-sm);
+  padding: 0 6px;
+  font-size: 12.5px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+.ad-project-group__rename-input:focus,
+.ad-session-row__rename-input:focus {
+  outline: none;
+}
 
 .ad-session-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 0 var(--space-2);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -145,15 +201,21 @@
 
 /* Reserved space always, revealed on hover/focus so it never shifts the
  * row's other content when it appears (same pattern as message toolbars). */
+.ad-session-row__rename,
 .ad-session-row__delete {
   flex-shrink: 0;
   opacity: 0;
   color: var(--color-text-tertiary);
   transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
 }
+.ad-session-row:hover .ad-session-row__rename,
+.ad-session-row__rename:focus-visible,
 .ad-session-row:hover .ad-session-row__delete,
 .ad-session-row__delete:focus-visible {
   opacity: 1;
+}
+.ad-session-row__rename:hover {
+  color: var(--color-text-primary);
 }
 .ad-session-row__delete:hover {
   color: var(--color-danger);

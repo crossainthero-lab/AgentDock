@@ -12,7 +12,10 @@ const api: AgentDockApi = {
     open: () => ipcRenderer.invoke(IpcChannels.workspaceOpen),
     list: () => ipcRenderer.invoke(IpcChannels.workspaceList),
     getCurrent: () => ipcRenderer.invoke(IpcChannels.workspaceGetCurrent),
-    close: () => ipcRenderer.invoke(IpcChannels.workspaceClose)
+    close: () => ipcRenderer.invoke(IpcChannels.workspaceClose),
+    rename: (id, name) => ipcRenderer.invoke(IpcChannels.workspaceRename, id, name),
+    delete: (id) => ipcRenderer.invoke(IpcChannels.workspaceDelete, id),
+    setCollapsed: (id, collapsed) => ipcRenderer.invoke(IpcChannels.workspaceSetCollapsed, id, collapsed)
   },
 
   agents: {
@@ -63,6 +66,7 @@ const api: AgentDockApi = {
     interrupt: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionInterrupt, sessionId),
     stop: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionStop, sessionId),
     delete: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionDelete, sessionId),
+    rename: (sessionId, title) => ipcRenderer.invoke(IpcChannels.sessionRename, sessionId, title),
     onEvent: (sessionId, cb) => {
       const listener = (_event: Electron.IpcRendererEvent, envelope: SessionEventEnvelope): void => {
         if (envelope.sessionId === sessionId) cb({ event: envelope.event, sequence: envelope.sequence, eventId: envelope.eventId })

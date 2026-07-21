@@ -124,6 +124,22 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// A fresh spawn's `-i <prompt>` normally passes the prompt as a raw argv
+// element (see send() below) — fine for a short single-line prompt, but
+// Windows' command-line length limit and node-pty/ConPTY's own argv
+// quoting get genuinely fragile for large multi-line content (confirmed
+// root cause of a real continuation-handoff failure: a long, multi-line
+// prompt delivered this way left agy showing "Interrupted" instead of
+// starting the task — see handoff-service.ts's module comment for the full
+// story). Anything long or multi-line is instead delivered the same
+// already-proven way image attachments are: spawn bare, wait for the
+// process to genuinely reach idle, then write the prompt directly into the
+// PTY via bracketed paste (see pasteImagesThenSend).
+const BOOTSTRAP_DELIVERY_CHAR_THRESHOLD = 500
+function needsBootstrapDelivery(prompt: string): boolean {
+  return prompt.includes('\n') || prompt.length > BOOTSTRAP_DELIVERY_CHAR_THRESHOLD
+}
+
 function isTerminalEvent(event: AgentEvent): boolean {
   return event.type === 'turn_completed' || event.type === 'turn_failed'
 }
@@ -156,14 +172,17 @@ class AntigravityRunHandle implements AgentRunHandle {
   /** Set by stop()/setModel() — distinguishes a deliberate kill from a
    *  genuine crash when the process then exits. */
   private userCausedExit = false
-  /** True from a fresh bare-spawned process (no `-i <prompt>` — attachments
-   *  need the process fully idle/trusted before pasting) until the first
-   *  genuine idle transition, at which point pasteImagesThenSend() takes
-   *  over. While true, ordinary classification (including a genuine
-   *  workspace-trust prompt) still runs and is still emitted — only the
-   *  turn_completed that idle transition would otherwise produce is
+  /** True from a fresh bare-spawned process (no `-i <prompt>` — needed both
+   *  for attachments, which must wait for the process to be fully
+   *  idle/trusted before pasting, and for a long/multi-line prompt, which
+   *  needs to avoid argv entirely — see needsBootstrapDelivery) until the
+   *  first genuine idle transition, at which point pasteImagesThenSend()
+   *  takes over (a no-op image loop when there are none, just the real
+   *  prompt write). While true, ordinary classification (including a
+   *  genuine workspace-trust prompt) still runs and is still emitted — only
+   *  the turn_completed that idle transition would otherwise produce is
    *  suppressed, since no real turn has been sent to answer yet. */
-  private attachingImages = false
+  private bootstrappingFirstPrompt = false
   private pendingAttachImages: string[] = []
   private pendingAttachPrompt = ''
   /** Highest "N media attached" count seen on screen so far this process
@@ -224,28 +243,33 @@ class AntigravityRunHandle implements AgentRunHandle {
       return
     }
 
+    // Images always need the bootstrap path (nothing to paste into until a
+    // process exists); a long/multi-line prompt needs it too, regardless of
+    // images, for the argv-safety reason above.
+    const needsStdinDelivery = hasImages || needsBootstrapDelivery(prompt)
+
     const args: string[] = [...permissionArgs(this.ctx.permissionMode), '--add-dir', this.ctx.workspacePath]
     if (this.currentModel) args.push('--model', this.currentModel)
     if (this.nativeConversationId) args.push('--conversation', this.nativeConversationId)
-    // With attachments, the process is spawned bare (no `-i`) — the real
-    // prompt is written normally, after the images are pasted, once the
-    // fresh process is confirmed idle/ready (see attachingImages above).
-    if (!hasImages) args.push('-i', prompt)
+    // With attachments or a long/multi-line prompt, the process is spawned
+    // bare (no `-i`) — the real prompt is written normally once the fresh
+    // process is confirmed idle/ready (see bootstrappingFirstPrompt below).
+    if (!needsStdinDelivery) args.push('-i', prompt)
 
-    const redactedArgs = hasImages ? args : [...args.slice(0, -1), '<prompt>']
+    const redactedArgs = needsStdinDelivery ? args : [...args.slice(0, -1), '<prompt>']
     console.log(`[antigravity] launching interactive session, args (prompt redacted): ${JSON.stringify(redactedArgs)}`)
     this.controller = createTerminalSessionController(this.ctx.executablePath, args, { cwd: this.ctx.workspacePath })
     this.classifier.reset()
-    // Bare-spawn attachment bootstrap (hasImages): nothing is written to the
+    // Bare-spawn bootstrap (needsStdinDelivery): nothing is written to the
     // PTY until pasteImagesThenSend's own beginTurn() call right before the
     // real prompt write — no echo is possible yet, so it must not be
     // required here (see AntigravityClassifier's requiresEcho doc comment).
-    this.classifier.beginTurn(prompt, { requiresEcho: !hasImages })
+    this.classifier.beginTurn(prompt, { requiresEcho: !needsStdinDelivery })
     this.conflictState = createConflictState()
     this.mediaAttachedCount = 0
-    if (hasImages) {
-      this.attachingImages = true
-      this.pendingAttachImages = images as string[]
+    if (needsStdinDelivery) {
+      this.bootstrappingFirstPrompt = true
+      this.pendingAttachImages = hasImages ? (images as string[]) : []
       this.pendingAttachPrompt = prompt
     }
 
@@ -305,7 +329,7 @@ class AntigravityRunHandle implements AgentRunHandle {
       return event
     })
 
-    if (this.attachingImages) {
+    if (this.bootstrappingFirstPrompt) {
       // A fresh bare-spawned process reaching idle for the first time means
       // it's fully trusted/ready — genuine content up to now (e.g. the
       // workspace-trust interaction itself) still flows through normally;
@@ -315,7 +339,7 @@ class AntigravityRunHandle implements AgentRunHandle {
         if (event.type !== 'turn_completed') this.emit(event)
       }
       if (reinterpreted.some(isTerminalEvent)) {
-        this.attachingImages = false
+        this.bootstrappingFirstPrompt = false
         void this.pasteImagesThenSend(this.pendingAttachImages, this.pendingAttachPrompt)
       }
       return
@@ -350,7 +374,10 @@ class AntigravityRunHandle implements AgentRunHandle {
    *  confirmation ("N media attached") before moving to the next one —
    *  never a fixed blind delay. The user's real clipboard content is saved
    *  before the first paste and restored afterward, whether or not every
-   *  attachment succeeded. */
+   *  attachment succeeded. `images` is legitimately empty when this is
+   *  reached only for needsBootstrapDelivery's long/multi-line-prompt
+   *  reason — the loop below is then just a no-op on the way to the real
+   *  prompt write. */
   private async pasteImagesThenSend(images: string[], prompt: string): Promise<void> {
     let savedImage: Electron.NativeImage | null = null
     let savedText: string | null = null

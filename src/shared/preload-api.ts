@@ -46,6 +46,13 @@ export interface AgentDockApi {
     list(): Promise<Workspace[]>
     getCurrent(): Promise<Workspace | null>
     close(): Promise<void>
+    /** Renames the project — its own display name, never the underlying
+     *  folder path. */
+    rename(id: string, name: string): Promise<Workspace>
+    /** Deletes the project and every conversation/message under it. Stops
+     *  any live agent processes first. Irreversible. */
+    delete(id: string): Promise<void>
+    setCollapsed(id: string, collapsed: boolean): Promise<void>
   }
   agents: {
     list(): Promise<AgentDetection[]>
@@ -149,6 +156,9 @@ export interface AgentDockApi {
     interrupt(sessionId: string): Promise<void>
     stop(sessionId: string): Promise<void>
     delete(sessionId: string): Promise<void>
+    /** Sets titleSource to 'manual' — permanently protected from any future
+     *  automatic title generation. */
+    rename(sessionId: string, title: string): Promise<Session>
     onEvent(sessionId: string, cb: (payload: SessionEventPayload) => void): Unsubscribe
     /** Debug instrumentation only (Testing Mode) — never carries prompt/reply
      *  text, see TraceEvent. */

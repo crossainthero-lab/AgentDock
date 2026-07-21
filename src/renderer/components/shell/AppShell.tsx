@@ -11,11 +11,19 @@ import { ApprovalDialog } from '../session/ApprovalDialog'
 import './AppShell.css'
 
 export function AppShell(): React.JSX.Element {
-  const { workspace, workspaceLoading, selectedSessionId, settingsViewOpen, setSettingsViewOpen, openWorkspace } =
-    useAppState()
+  const {
+    projects,
+    projectsLoading,
+    selectedSessionId,
+    newSessionProjectId,
+    workspace,
+    settingsViewOpen,
+    setSettingsViewOpen,
+    openWorkspace
+  } = useAppState()
 
   useEffect(() => {
-    if (workspace) return
+    if (projects.length > 0) return
     const onKeyDown = (e: KeyboardEvent): void => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
         e.preventDefault()
@@ -24,7 +32,13 @@ export function AppShell(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [workspace, openWorkspace])
+  }, [projects.length, openWorkspace])
+
+  // Falls back to the most recently active project's agent picker when
+  // nothing else has been explicitly chosen yet (e.g. right after launch)
+  // — the same default single-project behavior this app always had, now
+  // just one of several projects rather than the only one.
+  const effectiveNewSessionProjectId = newSessionProjectId ?? workspace?.id ?? null
 
   return (
     <div className="ad-app-shell">
@@ -32,12 +46,14 @@ export function AppShell(): React.JSX.Element {
       <div className="ad-app-shell__body">
         <SessionSidebar />
         <main className="ad-app-shell__main">
-          {workspaceLoading ? null : !workspace ? (
+          {projectsLoading ? null : projects.length === 0 ? (
             <EmptyWorkspace />
-          ) : !selectedSessionId ? (
-            <NewSessionView />
-          ) : (
+          ) : selectedSessionId ? (
             <SessionView sessionId={selectedSessionId} />
+          ) : effectiveNewSessionProjectId ? (
+            <NewSessionView projectId={effectiveNewSessionProjectId} />
+          ) : (
+            <EmptyWorkspace />
           )}
         </main>
       </div>

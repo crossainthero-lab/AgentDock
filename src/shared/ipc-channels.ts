@@ -6,6 +6,9 @@ export const IpcChannels = {
   workspaceList: 'workspace:list',
   workspaceGetCurrent: 'workspace:getCurrent',
   workspaceClose: 'workspace:close',
+  workspaceRename: 'workspace:rename',
+  workspaceDelete: 'workspace:delete',
+  workspaceSetCollapsed: 'workspace:setCollapsed',
 
   agentsList: 'agents:list',
   agentsDetect: 'agents:detect',
@@ -45,6 +48,7 @@ export const IpcChannels = {
   sessionInterrupt: 'session:interrupt',
   sessionStop: 'session:stop',
   sessionDelete: 'session:delete',
+  sessionRename: 'session:rename',
   sessionEvent: 'session:event',
   sessionTrace: 'session:trace',
   sessionRespondInteraction: 'session:respondInteraction',
