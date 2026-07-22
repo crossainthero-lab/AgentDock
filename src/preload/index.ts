@@ -8,6 +8,7 @@ import type { TraceEventEnvelope } from '@shared/events/trace-event'
 // are exposed to the renderer. Every method here maps 1:1 to a specific
 // main-process capability.
 const api: AgentDockApi = {
+  platform: process.platform,
   workspace: {
     open: () => ipcRenderer.invoke(IpcChannels.workspaceOpen),
     list: () => ipcRenderer.invoke(IpcChannels.workspaceList),

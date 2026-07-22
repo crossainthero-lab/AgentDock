@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import {
   describeResolutionFailure,
   findCandidates,
+  knownInstallDirs,
+  knownMacInstallDirs,
   knownWindowsInstallDirs,
   resolveExecutable,
   type ValidationOutcome
@@ -29,6 +31,29 @@ function rejecting(...exactPaths: string[]): (path: string) => Promise<Validatio
   }
 }
 
+/** Writes a file and marks it executable (`chmod +x`) — the real-world
+ *  shape of a genuine, runnable CLI on macOS/Linux, where (unlike Windows)
+ *  executability is a permission bit, not a file-extension convention. Test
+ *  cases that are specifically about that permission bit use plain
+ *  `writeFileSync` instead so the file is deliberately NOT executable. */
+function writeExecutable(path: string, content = ''): void {
+  writeFileSync(path, content)
+  chmodSync(path, 0o755)
+}
+
+/** These tests exercise one specific platform's branch of
+ *  executable-resolver.ts at a time — Windows extension/PATHEXT semantics
+ *  have no macOS equivalent and vice versa. Stubbing `process.platform` for
+ *  the duration of a test (restored immediately after) means the real
+ *  Windows-only logic still gets exercised and verified even when the
+ *  whole suite runs on a Mac dev machine or CI runner, rather than being
+ *  skipped — this is what "preserve the Windows tests" means in practice
+ *  once the resolver itself became genuinely cross-platform. */
+function stubPlatform(value: NodeJS.Platform): void {
+  Object.defineProperty(process, 'platform', { value, configurable: true })
+}
+const realPlatform = process.platform
+
 describe('executable-resolver', () => {
   let dir: string
   let originalEnv: NodeJS.ProcessEnv
@@ -44,9 +69,12 @@ describe('executable-resolver', () => {
       if (!(key in originalEnv)) delete process.env[key]
     }
     Object.assign(process.env, originalEnv)
+    stubPlatform(realPlatform)
   })
 
-  describe('findCandidates', () => {
+  describe('findCandidates (Windows: extension/PATHEXT semantics)', () => {
+    beforeEach(() => stubPlatform('win32'))
+
     it('finds a bare candidate name on PATH with a Windows extension', () => {
       writeFileSync(join(dir, 'myagent.exe'), '')
       process.env.PATH = dir
@@ -133,7 +161,63 @@ describe('executable-resolver', () => {
       const result = findCandidates(['first', 'second'], null)
       expect(result.candidates.map((c) => c.toLowerCase())).toContain(join(dir, 'second.exe').toLowerCase())
     })
+  })
 
+  describe('findCandidates (macOS: bare-name, permission-bit semantics)', () => {
+    beforeEach(() => stubPlatform('darwin'))
+
+    it('finds a bare candidate name on PATH — no extension juggling, unlike Windows', () => {
+      writeExecutable(join(dir, 'myagent'))
+      process.env.PATH = dir
+
+      const result = findCandidates(['myagent'], null)
+      expect(result.candidates).toContain(join(dir, 'myagent'))
+    })
+
+    it('never searches inside a node_modules directory on PATH, same as on Windows', () => {
+      const nodeModulesBin = join(dir, 'node_modules', '.bin')
+      mkdirSync(nodeModulesBin, { recursive: true })
+      writeExecutable(join(nodeModulesBin, 'codex'), '#!/bin/sh\necho fake shim\n')
+
+      const realInstallDir = join(dir, 'real-install')
+      mkdirSync(realInstallDir, { recursive: true })
+      writeExecutable(join(realInstallDir, 'codex'))
+
+      process.env.PATH = [nodeModulesBin, realInstallDir].join(delimiter)
+
+      const result = findCandidates(['codex'], null)
+      expect(result.candidates.some((c) => c.includes('node_modules'))).toBe(false)
+      expect(result.candidates).toContain(join(realInstallDir, 'codex'))
+    })
+
+    it('CRITICAL (macOS portability): finds a real executable inside a PATH directory whose own path contains spaces, an apostrophe, and Unicode characters', () => {
+      const unicodeDir = join(dir, "Pat O'Brien's Tools 日本語 café")
+      mkdirSync(unicodeDir, { recursive: true })
+      writeExecutable(join(unicodeDir, 'myagent'))
+      process.env.PATH = unicodeDir
+
+      const result = findCandidates(['myagent'], null)
+      expect(result.candidates).toContain(join(unicodeDir, 'myagent'))
+    })
+
+    it('tries candidate names in order, still finding the second name if the first has no match anywhere', () => {
+      writeExecutable(join(dir, 'second'))
+      process.env.PATH = dir
+
+      const result = findCandidates(['first', 'second'], null)
+      expect(result.candidates).toContain(join(dir, 'second'))
+    })
+
+    it('does not require the execute bit to appear as a candidate — permission is checked later, in resolveExecutable, so it can be surfaced as a specific rejection reason', () => {
+      writeFileSync(join(dir, 'noexec'), '') // deliberately no chmod
+      process.env.PATH = dir
+
+      const result = findCandidates(['noexec'], null)
+      expect(result.candidates).toContain(join(dir, 'noexec'))
+    })
+  })
+
+  describe('findCandidates (platform-agnostic)', () => {
     it('an absolute custom path is the only candidate considered — no PATH fallback', () => {
       writeFileSync(join(dir, 'custom.exe'), '')
       const otherDir = join(dir, 'other')
@@ -148,7 +232,9 @@ describe('executable-resolver', () => {
     })
   })
 
-  describe('resolveExecutable', () => {
+  describe('resolveExecutable (Windows)', () => {
+    beforeEach(() => stubPlatform('win32'))
+
     it('resolves and validates a real candidate', async () => {
       writeFileSync(join(dir, 'myagent.exe'), '')
       process.env.PATH = dir
@@ -291,7 +377,105 @@ describe('executable-resolver', () => {
     })
   })
 
+  describe('resolveExecutable (macOS)', () => {
+    beforeEach(() => stubPlatform('darwin'))
+
+    it('resolves and validates a real executable candidate found on PATH', async () => {
+      writeExecutable(join(dir, 'myagent'))
+      process.env.PATH = dir
+
+      const result = await resolveExecutable(['myagent'], null, acceptAll)
+      expect(result.resolvedPath).toBe(join(dir, 'myagent'))
+      expect(result.strategy).toBe('path-search')
+      expect(result.rejected).toEqual([])
+    })
+
+    it('CRITICAL: rejects a candidate that exists but is missing the execute permission bit, with a specific reason, before ever spawning a probe', async () => {
+      writeFileSync(join(dir, 'noexec'), '') // no chmod — default mode has no +x
+      process.env.PATH = dir
+      let probeCalled = false
+
+      const result = await resolveExecutable(['noexec'], null, async () => {
+        probeCalled = true
+        return { ok: true, output: 'should never get here' }
+      })
+
+      expect(probeCalled).toBe(false)
+      expect(result.resolvedPath).toBeNull()
+      expect(result.strategy).toBe('not-found')
+      expect(result.rejected).toEqual([{ path: join(dir, 'noexec'), reason: 'found but missing execute permission (try: chmod +x)' }])
+    })
+
+    it('falls back to a known-location directory (e.g. Homebrew) when PATH search finds nothing there', async () => {
+      const emptyPathDir = join(dir, 'empty-path')
+      mkdirSync(emptyPathDir)
+      process.env.PATH = emptyPathDir
+
+      const knownDir = join(dir, 'opt-homebrew-style', 'bin')
+      mkdirSync(knownDir, { recursive: true })
+      writeExecutable(join(knownDir, 'myagent'))
+
+      const result = await resolveExecutable(['myagent'], null, acceptAll, [knownDir])
+      expect(result.resolvedPath).toBe(join(knownDir, 'myagent'))
+      expect(result.strategy).toBe('known-location')
+    })
+
+    it('a PATH match always wins over a known-location match, even when both exist', async () => {
+      const pathDir = join(dir, 'on-path')
+      const knownDir = join(dir, 'known-install')
+      mkdirSync(pathDir)
+      mkdirSync(knownDir)
+      writeExecutable(join(pathDir, 'myagent'))
+      writeExecutable(join(knownDir, 'myagent'))
+      process.env.PATH = pathDir
+
+      const result = await resolveExecutable(['myagent'], null, acceptAll, [knownDir])
+      expect(result.resolvedPath).toBe(join(pathDir, 'myagent'))
+      expect(result.strategy).toBe('path-search')
+    })
+
+    it('a configured custom path still wins outright even when a known-location directory also has a match', async () => {
+      const knownDir = join(dir, 'known-install')
+      mkdirSync(knownDir)
+      writeExecutable(join(knownDir, 'myagent'))
+      const customPath = join(dir, 'custom')
+      writeExecutable(customPath)
+      process.env.PATH = dir
+
+      const result = await resolveExecutable(['myagent'], customPath, acceptAll, [knownDir])
+      expect(result.resolvedPath).toBe(customPath)
+      expect(result.strategy).toBe('custom-path')
+    })
+
+    it('a custom path that fails validation is reported as a clear error, never silently substituted with a different candidate', async () => {
+      writeExecutable(join(dir, 'custom'))
+      const realDir = join(dir, 'real')
+      mkdirSync(realDir)
+      writeExecutable(join(realDir, 'irrelevant'))
+      process.env.PATH = realDir
+
+      const customPath = join(dir, 'custom')
+      const result = await resolveExecutable(['irrelevant'], customPath, async () => ({ ok: false, reason: 'ENOENT: broken override' }))
+      expect(result.resolvedPath).toBeNull()
+      expect(result.strategy).toBe('not-found')
+      expect(result.rejected).toEqual([{ path: customPath, reason: 'ENOENT: broken override' }])
+    })
+
+    it('simulates a Finder-launch limited PATH (/usr/bin:/bin only) still finding an agent via the known-Homebrew-location fallback', async () => {
+      process.env.PATH = ['/usr/bin', '/bin'].join(delimiter)
+      const homebrewStyleDir = join(dir, 'opt', 'homebrew', 'bin')
+      mkdirSync(homebrewStyleDir, { recursive: true })
+      writeExecutable(join(homebrewStyleDir, 'claude'))
+
+      const result = await resolveExecutable(['claude'], null, acceptAll, [homebrewStyleDir])
+      expect(result.resolvedPath).toBe(join(homebrewStyleDir, 'claude'))
+      expect(result.strategy).toBe('known-location')
+    })
+  })
+
   describe('knownWindowsInstallDirs', () => {
+    beforeEach(() => stubPlatform('win32'))
+
     it('returns real per-agent Windows install directories derived from USERPROFILE/LOCALAPPDATA/APPDATA, not hardcoded to any specific machine or username', () => {
       process.env.USERPROFILE = 'Q:\\Users\\someone-else'
       process.env.LOCALAPPDATA = 'Q:\\Users\\someone-else\\AppData\\Local'
@@ -316,10 +500,76 @@ describe('executable-resolver', () => {
       const dirs = knownWindowsInstallDirs()
       expect(dirs.every((d) => typeof d === 'string' && d.length > 0)).toBe(true)
     })
+
+    it('returns an empty list when queried on a non-Windows platform', () => {
+      stubPlatform('darwin')
+      expect(knownWindowsInstallDirs()).toEqual([])
+    })
+  })
+
+  describe('knownMacInstallDirs', () => {
+    beforeEach(() => stubPlatform('darwin'))
+
+    it('includes both Homebrew prefixes (Apple Silicon /opt/homebrew and Intel /usr/local), regardless of this process\'s own arch', () => {
+      const dirs = knownMacInstallDirs()
+      expect(dirs).toContain('/opt/homebrew/bin')
+      expect(dirs).toContain('/opt/homebrew/sbin')
+      expect(dirs).toContain('/usr/local/bin')
+      expect(dirs).toContain('/usr/local/sbin')
+    })
+
+    it('includes the standard system bin/sbin directories', () => {
+      const dirs = knownMacInstallDirs()
+      expect(dirs).toContain('/usr/bin')
+      expect(dirs).toContain('/bin')
+    })
+
+    it('includes ~/.local/bin and ~/.npm-global/bin, derived from the real home directory — never a hardcoded username', () => {
+      const dirs = knownMacInstallDirs()
+      const home = homedir()
+      expect(dirs).toContain(join(home, '.local', 'bin'))
+      expect(dirs).toContain(join(home, '.npm-global', 'bin'))
+      expect(dirs.every((d) => !d.toLowerCase().includes('billy'))).toBe(true)
+    })
+
+    it('includes an npm global bin directory derived from npm_config_prefix when set', () => {
+      process.env['npm_config_prefix'] = '/some/custom/npm-prefix'
+      const dirs = knownMacInstallDirs()
+      expect(dirs).toContain(join('/some/custom/npm-prefix', 'bin'))
+    })
+
+    it('degrades gracefully (never throws) when npm_config_prefix is unset', () => {
+      delete process.env['npm_config_prefix']
+      expect(() => knownMacInstallDirs()).not.toThrow()
+    })
+
+    it('returns an empty list when queried on a non-macOS platform', () => {
+      stubPlatform('win32')
+      expect(knownMacInstallDirs()).toEqual([])
+    })
+  })
+
+  describe('knownInstallDirs (platform dispatch)', () => {
+    it('dispatches to knownWindowsInstallDirs on win32', () => {
+      stubPlatform('win32')
+      process.env.USERPROFILE = 'Q:\\Users\\someone-else'
+      expect(knownInstallDirs()).toEqual(knownWindowsInstallDirs())
+    })
+
+    it('dispatches to knownMacInstallDirs on darwin', () => {
+      stubPlatform('darwin')
+      expect(knownInstallDirs()).toEqual(knownMacInstallDirs())
+    })
+
+    it('returns an empty list on a platform with no defined fallback (e.g. linux)', () => {
+      stubPlatform('linux')
+      expect(knownInstallDirs()).toEqual([])
+    })
   })
 
   describe('describeResolutionFailure', () => {
     it('builds a detailed failure message including agent, candidates, custom path, workspace, and rejected candidates', async () => {
+      stubPlatform('win32')
       writeFileSync(join(dir, 'ghost'), '')
       process.env.PATH = dir
       process.env.PATHEXT = '.EXE'
@@ -338,6 +588,23 @@ describe('executable-resolver', () => {
       expect(message).toContain('/some/workspace')
       expect(message).toContain('PATH directories searched')
       expect(message).toContain('not runnable')
+    })
+
+    it('surfaces a missing-execute-permission rejection reason on macOS the same way a failed probe would be surfaced', async () => {
+      stubPlatform('darwin')
+      writeFileSync(join(dir, 'ghost'), '') // no chmod
+      process.env.PATH = dir
+      const result = await resolveExecutable(['ghost'], null, acceptAll)
+
+      const message = describeResolutionFailure({
+        agentId: 'ghost-agent',
+        candidates: ['ghost'],
+        customPath: null,
+        workspacePath: '/some/workspace',
+        result
+      })
+
+      expect(message).toContain('missing execute permission')
     })
   })
 })

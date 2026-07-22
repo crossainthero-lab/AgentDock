@@ -84,6 +84,10 @@ if (typeof window !== 'undefined' && !window.agentDock) {
   }
 
   const api: AgentDockApi = {
+    // No real Electron preload to ask, so this reflects the actual host OS
+    // via the browser itself — lets a developer previewing in a plain
+    // browser tab on a Mac still see the mac-specific titlebar treatment.
+    platform: navigator.platform.toLowerCase().includes('mac') ? 'darwin' : 'win32',
     workspace: {
       async open() {
         // A browser tab cannot show a native OS folder picker (that's an

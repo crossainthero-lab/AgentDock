@@ -6,6 +6,11 @@ import { useAppState } from '../../state/AppStateContext'
 import { IconButton } from '../ui/IconButton'
 import './TitleBar.css'
 
+// macOS gets its own native traffic-light controls (see main/index.ts's
+// titleBarStyle: 'hiddenInset') — rendering these Windows-style custom
+// min/max/close buttons on top would just be a confusing duplicate set.
+const isMac = getAgentDock().platform === 'darwin'
+
 export function TitleBar(): React.JSX.Element {
   const { workspace, projects, sessionsByProject, selectedSessionId, newSessionProjectId, setSettingsViewOpen } =
     useAppState()
@@ -46,7 +51,7 @@ export function TitleBar(): React.JSX.Element {
   }, [activeProject])
 
   return (
-    <div className="ad-titlebar drag">
+    <div className={`ad-titlebar drag${isMac ? ' ad-titlebar--mac' : ''}`}>
       <div className="ad-titlebar__left">
         <span className="ad-titlebar__logo">AgentDock</span>
         {activeProject && (
@@ -67,29 +72,31 @@ export function TitleBar(): React.JSX.Element {
         <IconButton label="Settings" size="sm" onClick={() => setSettingsViewOpen(true)}>
           <SettingsIcon size={15} />
         </IconButton>
-        <div className="ad-titlebar__window-controls">
-          <button
-            className="ad-titlebar__control"
-            aria-label="Minimize"
-            onClick={() => getAgentDock().windowCtl.minimize()}
-          >
-            <Minus size={14} />
-          </button>
-          <button
-            className="ad-titlebar__control"
-            aria-label={isMaximized ? 'Restore' : 'Maximize'}
-            onClick={() => getAgentDock().windowCtl.maximize()}
-          >
-            <Square size={11} />
-          </button>
-          <button
-            className="ad-titlebar__control ad-titlebar__control--close"
-            aria-label="Close"
-            onClick={() => getAgentDock().windowCtl.close()}
-          >
-            <X size={14} />
-          </button>
-        </div>
+        {!isMac && (
+          <div className="ad-titlebar__window-controls">
+            <button
+              className="ad-titlebar__control"
+              aria-label="Minimize"
+              onClick={() => getAgentDock().windowCtl.minimize()}
+            >
+              <Minus size={14} />
+            </button>
+            <button
+              className="ad-titlebar__control"
+              aria-label={isMaximized ? 'Restore' : 'Maximize'}
+              onClick={() => getAgentDock().windowCtl.maximize()}
+            >
+              <Square size={11} />
+            </button>
+            <button
+              className="ad-titlebar__control ad-titlebar__control--close"
+              aria-label="Close"
+              onClick={() => getAgentDock().windowCtl.close()}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

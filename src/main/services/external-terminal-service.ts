@@ -2,8 +2,15 @@
 // workspace — deliberately NOT a reattachment to AgentDock's own live
 // session process (no such reattachment is implemented for either agent;
 // this always starts a brand new process the user can see and type into
-// directly). Windows only, matching this project's actual target platform.
+// directly). Branches by process.platform: Windows Terminal/cmd.exe on
+// win32 (original implementation), Terminal.app via AppleScript on darwin.
+// Linux is out of scope for this pass and reports a clear "not supported"
+// result rather than guessing at a terminal emulator.
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { chmod, unlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AgentId, LaunchTerminalResult } from '@shared/types'
 
 export interface LaunchTerminalParams {
@@ -79,10 +86,7 @@ function trySpawnDetached(command: string, args: string[], cwd: string): Promise
   })
 }
 
-export async function launchExternalTerminal(params: LaunchTerminalParams): Promise<LaunchTerminalResult> {
-  const interactiveArgs = buildInteractiveArgs(params)
-  const command = [params.executablePath, ...interactiveArgs].join(' ')
-
+async function launchWindowsTerminal(params: LaunchTerminalParams, interactiveArgs: string[], command: string): Promise<LaunchTerminalResult> {
   try {
     // Windows Terminal: `-d <dir>` sets the starting directory; everything
     // after is the command to run inside the new tab.
@@ -106,6 +110,72 @@ export async function launchExternalTerminal(params: LaunchTerminalParams): Prom
       return { launched: false, method: null, command, error }
     }
   }
+}
+
+/** Single-quotes a value for safe interpolation into a POSIX `/bin/sh`
+ *  command: closes the quote, inserts an escaped literal quote, reopens it.
+ *  Handles spaces, double quotes, `$`, backticks, and apostrophes in the
+ *  value itself — all of which are otherwise dangerous to interpolate into
+ *  a shell command string built as plain text. */
+function shQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/** The actual `cd`+exec logic lives in a tiny generated shell script file,
+ *  not inline in the AppleScript command string — this is deliberate: the
+ *  workspace path and executable path (which can contain spaces, Unicode,
+ *  or apostrophes — anything a real macOS username/folder name can
+ *  contain) only ever need POSIX shell quoting (shQuote above), never
+ *  AppleScript string quoting too. Only this script's own path — a
+ *  crypto-random name under the OS temp directory, never derived from user
+ *  input — gets embedded into the AppleScript string, so there is no
+ *  second layer of escaping to get right (and no injection surface). */
+function buildMacLaunchScript(scriptPath: string, params: LaunchTerminalParams, interactiveArgs: string[]): string {
+  const lines = [
+    '#!/bin/sh',
+    // Deletes itself as the very first thing it does, once actually
+    // running — never on a fixed timer guessed from outside. A timer-based
+    // "delete after N seconds" is a genuine race: Terminal.app can take
+    // longer than that to even open its first window (e.g. a cold launch),
+    // in which case the file gets deleted out from under it before `do
+    // script` ever reads it, and the user sees "No such file or
+    // directory" instead of their agent starting — confirmed live on this
+    // exact machine. Unlinking an already-open/executing script is safe on
+    // POSIX: the shell already has the file open, so removing the
+    // directory entry doesn't disturb the running process at all.
+    `rm -f ${shQuote(scriptPath)}`,
+    `cd ${shQuote(params.workspacePath)}`,
+    `exec ${[params.executablePath, ...interactiveArgs].map(shQuote).join(' ')}`
+  ]
+  return lines.join('\n') + '\n'
+}
+
+async function launchMacTerminal(params: LaunchTerminalParams, interactiveArgs: string[], command: string): Promise<LaunchTerminalResult> {
+  const scriptPath = join(tmpdir(), `agentdock-launch-${randomUUID()}.sh`)
+  try {
+    await writeFile(scriptPath, buildMacLaunchScript(scriptPath, params, interactiveArgs), { mode: 0o755 })
+    await chmod(scriptPath, 0o755)
+    const appleScript = `tell application "Terminal" to do script "${scriptPath}"\ntell application "Terminal" to activate`
+    await trySpawnDetached('osascript', ['-e', appleScript], params.workspacePath)
+    return { launched: true, method: 'terminal-app', command }
+  } catch (err) {
+    void unlink(scriptPath).catch(() => {})
+    const error = `Could not open Terminal.app: ${describeError(err)}`
+    console.error(`[external-terminal] ${error}`)
+    return { launched: false, method: null, command, error }
+  }
+}
+
+export async function launchExternalTerminal(params: LaunchTerminalParams): Promise<LaunchTerminalResult> {
+  const interactiveArgs = buildInteractiveArgs(params)
+  const command = [params.executablePath, ...interactiveArgs].join(' ')
+
+  if (process.platform === 'darwin') return launchMacTerminal(params, interactiveArgs, command)
+  if (process.platform === 'win32') return launchWindowsTerminal(params, interactiveArgs, command)
+
+  const error = 'Opening an external terminal is not supported on this platform yet.'
+  console.warn(`[external-terminal] ${error}`)
+  return { launched: false, method: null, command, error }
 }
 
 function describeError(err: unknown): string {

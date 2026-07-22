@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import type { AgentDetection, AgentId } from '@shared/types'
 import {
   describeResolutionFailure,
-  knownWindowsInstallDirs,
+  knownInstallDirs,
   resolveExecutable,
   type ValidateCandidate,
   type ValidationOutcome
@@ -53,14 +53,25 @@ const PROBE_TIMEOUT_MS = 5000
  *  file that happens to exist with the right name (see
  *  executable-resolver.ts's module comment for the exact bug this
  *  prevents: an existsSync-only check previously accepted a POSIX shell
- *  shim that Windows cannot execute). `shell: true` is required here, not
- *  optional — it's what lets this same code path correctly launch a
- *  native .exe, an npm .cmd shim, or a .bat file uniformly: the shell
- *  itself resolves and executes whichever format the candidate is,
- *  instead of AgentDock needing to special-case each one. */
+ *  shim that Windows cannot execute). `shell: true` is only used on
+ *  Windows, where it's required (not optional) — it's what lets that
+ *  platform's code path correctly launch a native .exe, an npm .cmd shim,
+ *  or a .bat file uniformly, since CreateProcess itself cannot execute
+ *  .cmd/.bat directly. On macOS/Linux a real executable's shebang line is
+ *  interpreted by the kernel itself, so no shell is needed to run it — and
+ *  deliberately skipping the shell there avoids a real quoting bug: Node's
+ *  shell:true mode joins the executable path and args with plain spaces
+ *  with NO escaping (confirmed in Node's own child_process source), so a
+ *  path containing a space (e.g. a custom override under a directory whose
+ *  name has one) would silently be split into multiple words and fail to
+ *  resolve. Spawning directly (shell:false) passes the path and args as an
+ *  argv array with no shell involved, so spaces/quotes/Unicode in either
+ *  are handled correctly by construction — and it's also strictly safer,
+ *  since there is no shell to inject through. */
 function probeCandidate(executable: string, args: string[]): Promise<ValidationOutcome> {
+  const useShell = process.platform === 'win32'
   return new Promise((resolve) => {
-    execFile(executable, args, { shell: true, timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (error, stdout, stderr) => {
+    execFile(executable, args, { shell: useShell, timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (error, stdout, stderr) => {
       if (error) {
         const reason =
           'code' in error && error.code === 'ETIMEDOUT'
@@ -87,11 +98,12 @@ function executableType(path: string): string {
   if (lower.endsWith('.bat')) return 'bat'
   if (lower.endsWith('.com')) return 'com'
   if (lower.endsWith('.ps1')) return 'PowerShell script'
+  if (process.platform !== 'win32') return 'binary'
   return 'unknown'
 }
 
 async function detectOne(spec: DetectionSpec, customPath: string | null): Promise<AgentDetection> {
-  const resolution = await resolveExecutable(spec.candidates, customPath, makeValidator(spec), knownWindowsInstallDirs())
+  const resolution = await resolveExecutable(spec.candidates, customPath, makeValidator(spec), knownInstallDirs())
 
   if (!resolution.resolvedPath) {
     console.error(
