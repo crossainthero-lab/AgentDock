@@ -62,7 +62,8 @@ const api: AgentDockApi = {
     create: (input) => ipcRenderer.invoke(IpcChannels.sessionCreate, input),
     list: (workspaceId) => ipcRenderer.invoke(IpcChannels.sessionList, workspaceId),
     get: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionGet, sessionId),
-    sendPrompt: (sessionId, text, turnId, images) => ipcRenderer.invoke(IpcChannels.sessionSendPrompt, sessionId, text, turnId, images),
+    sendPrompt: (sessionId, text, turnId, images, displayText) =>
+      ipcRenderer.invoke(IpcChannels.sessionSendPrompt, sessionId, text, turnId, images, displayText),
     interrupt: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionInterrupt, sessionId),
     stop: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionStop, sessionId),
     delete: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionDelete, sessionId),

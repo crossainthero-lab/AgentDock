@@ -11,12 +11,34 @@ asarUnpack:
   - 'node_modules/node-pty/build/Release/**'
   - 'node_modules/node-pty/prebuilds/**'
 win:
-  target: nsis
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
   # Avoids electron-builder fetching winCodeSign (needed only for exe
   # resource/signature editing) — on this machine extracting that archive
   # fails because non-elevated Windows accounts lack the privilege to
   # create the symlinks it contains. We don't code-sign, so this is safe.
+  # Unsigned builds show a Windows SmartScreen warning on first run —
+  # expected and documented, not a bug; code signing is out of scope for
+  # this pass.
   signAndEditExecutable: false
+nsis:
+  # Per-user install (no admin elevation required) with a real wizard
+  # (not a silent one-click install) so the user can see/choose the
+  # install directory and shortcuts, and gets proper Start Menu +
+  # uninstaller entries — electron-builder's NSIS target provides both
+  # automatically for a non-oneClick build.
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: AgentDock
 mac:
   target: dmg
   category: public.app-category.developer-tools

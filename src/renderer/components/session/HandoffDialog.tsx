@@ -54,7 +54,25 @@ export function HandoffDialog({ open, onClose, sourceSession, onCompleted }: Han
       // message in the app uses — never auto-sent server-side, which used
       // to invent a turnId the renderer's reducer never learned and so
       // rejected every event for it, rendering the response blank.
-      void sendConversationPrompt(session.id, session.agentId, prompt)
+      //
+      // CRITICAL (real bug fix — root cause of the reported "handoff
+      // context is visible in the user bubble" bug, confirmed via a real
+      // captured Claude -> Codex -> Antigravity chain): `prompt` is the
+      // FULL text actually delivered to the destination agent — the user's
+      // instruction followed by the entire "--- Continuation context ---"
+      // envelope (workspace path, prior actions, files changed, unresolved
+      // issues; see handoff-service.ts's buildContinuationPrompt). That
+      // full text must keep reaching the agent unchanged, but the chat
+      // bubble the user sees must show only what they actually typed here.
+      // `displayText` carries that distinction through sendPrompt (and from
+      // there into the persisted message row — see session-service.ts) so
+      // the clean bubble survives a session switch and an app restart, not
+      // just this optimistic render. Mirrors buildContinuationPrompt's own
+      // fallback wording exactly, so an empty "Additional instruction"
+      // shows the same placeholder the destination agent itself received
+      // as its lead line, not a blank bubble.
+      const displayText = instruction.trim() || 'Continue the work described below.'
+      void sendConversationPrompt(session.id, session.agentId, prompt, undefined, displayText)
       await refreshSessions()
       onCompleted(session)
       onClose()

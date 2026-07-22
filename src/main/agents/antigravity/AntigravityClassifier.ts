@@ -94,12 +94,36 @@ const BUSY_FOOTER_LINE = /esc to cancel\b.*$/i
 // into a live conversation on unconfirmed behavior risks it being
 // interpreted as real chat content instead.
 const CSAT_SURVEY_LINE = /how'?s the cli experience so far|\[\d\]\s*(good|fine|bad|skip)\b/i
-// CRITICAL (real bug fix): agy's own transient "Generating..." status text
-// (real captured shape, shown immediately below the echoed prompt while a
-// turn is in flight) — a real reply can settle into a row this line
-// previously occupied, so it must be filtered by content, not just skipped
-// via position.
-const GENERATING_LINE = /^Generating\.\.\.$/i
+// CRITICAL (real bug fix, confirmed via a real captured multi-hop handoff
+// session — see this file's git history / the investigation that produced
+// this fix): agy's transient "Generating..." status text and its
+// "▸ Thought Process" collapsed-thought heading can each end up glued
+// directly onto the START of real reply text on the exact same rendered PTY
+// row, with no separating newline at all (e.g. a real captured row read
+// literally "...(failed 5 times)▸ Thought Process" with the real reply
+// beginning immediately after it on the very next row). Neither is safe to
+// filter as a whole-line match for that reason — matching only an exact,
+// standalone line would leave the glued chrome sitting at the front of what
+// then becomes the first line of the reply. Both are matched and stripped
+// as a LEADING PREFIX instead (see stripLeadingChrome), keeping whatever
+// real text follows on the same row. Deliberately narrow: "Generating"
+// requires agy's own literal ellipsis-terminated status shape (ASCII "..."
+// or the Unicode "…" agy has been observed to render), and "Thought
+// Process" requires the same "▸" arrow marker THOUGHT_LINE's "Thought for
+// Ns" already relies on as an unambiguous chrome signal — neither pattern
+// matches ordinary prose that merely contains those words (e.g. "Generating
+// a random UUID" or "My thought process here" never match — no literal
+// ellipsis/arrow immediately follows "Generating"/precedes "Thought
+// Process" in either).
+const GENERATING_PREFIX = /^Generating(?:\.\.\.|…)+\s*/i
+const THOUGHT_PROCESS_ARROW_PREFIX = /^▸\s*Thought Process\s*/i
+// The same heading with no leading "▸" arrow (real captured shape: agy
+// sometimes redraws it as a bare standalone line) — matched only as a WHOLE
+// line, never a prefix, specifically so genuine prose that happens to
+// start a line with the words "Thought Process" (e.g. "Thought Process:
+// I decided to use localStorage...") is never touched; only a line with
+// NOTHING else on it is agy's own chrome.
+const THOUGHT_PROCESS_BARE_LINE = /^Thought Process$/i
 // CRITICAL (real bug fix): the fixed reasoning-subtitle line normally
 // swallowed via expectingThoughtLabel's one-shot "skip the next line" state
 // (see its doc comment) — that mechanism only fires when this line
@@ -122,6 +146,22 @@ const THOUGHT_SUBTITLE_LINE = /^Prioritizing Tool Usage$/i
 // since content-keyed dedup only skips lines already seen, never lines that
 // are simply not part of the conversation at all.
 const RESUME_COMMAND_LINE = /^Resume with -c\b|^agy --conversation=/i
+// Animated braille spinner glyphs — the same character set the existing,
+// real-captured auth-screen spinner ("⣾  Signing in...") already
+// demonstrates agy uses for transient in-progress indicators (see
+// detectAuthRequired's own doc comment for that specific capture). Like
+// GENERATING_PREFIX/THOUGHT_PROCESS_ARROW_PREFIX, matched as a leading
+// PREFIX rather than a whole-line pattern: a spinner glyph is exactly the
+// kind of transient decoration that can sit directly in front of real
+// content the instant it resolves, on the very same row, the same class of
+// glued-chrome shape this file's other prefixes exist to handle.
+const SPINNER_PREFIX = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]+\s*/
+// A bare elapsed-time readout with nothing else on the row (e.g. a status
+// area showing just "12s" or "1m 04s" while idle-adjacent to a spinner) —
+// exact whole-line match only, deliberately never a prefix, so real prose
+// that happens to mention a duration (e.g. "This took about 12s to run.")
+// is never touched.
+const ELAPSED_TIME_LINE = /^\d+(?:m\s*\d+)?s$/i
 
 // CRITICAL (real bug fix — proven via static analysis of real captured agy
 // screen sequences gathered during this investigation): the old
@@ -147,8 +187,40 @@ const RESUME_COMMAND_LINE = /^Resume with -c\b|^agy --conversation=/i
 // turn now suppresses all content until its own real prompt has genuinely
 // been echoed back, the same protection turn 1 always had, applied
 // uniformly to every later turn on a reused process too.
-function normalizeForEchoMatch(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
+// CRITICAL (real bug fix, proven via a real captured Codex -> Antigravity
+// handoff session): agy's own rendering of pasted text can DROP certain
+// "smart"/typographic Unicode punctuation entirely rather than displaying it
+// (or any substitute) — confirmed live: a session title auto-derived from
+// natural-language text containing a curly apostrophe ("Claude’s existing
+// FocusBoard project") rendered on screen as "Claudes existing FocusBoard
+// project" — the apostrophe simply gone, not even a blank glyph left in its
+// place. Left unhandled, that single missing character was enough to break
+// the exact-content echo match at exactly that point, misclassifying the
+// ENTIRE REMAINDER of a long continuation prompt (workspace path, prior
+// work, files changed — everything after it) as new assistant content, the
+// very bug this file's echo-consumption logic exists to prevent. Stripped
+// out — never required to match — on BOTH sides of every echo comparison in
+// this file, alongside whitespace: curly single/double quotes, em/en
+// dashes, and horizontal ellipsis are the "smart typography" characters
+// most likely to appear in auto-generated text (titles, summaries) and
+// least likely to survive a terminal's own glyph rendering unchanged.
+const DROPPABLE_PUNCTUATION = /[’‘“”—–…]/g
+// A plain-string membership check for the same character set, used
+// per-character in rawColumnAfterFlatPrefix below — deliberately NOT reusing
+// DROPPABLE_PUNCTUATION's own `.test()` there: a global-flagged RegExp's
+// `.test()` is stateful (it advances `lastIndex` across calls), which would
+// silently skip every other match when called repeatedly in a loop like
+// that one. `.replace()` (flattenForEchoMatch's own use, above) doesn't
+// have this hazard — only a looped `.test()`/`.exec()` does.
+const DROPPABLE_PUNCTUATION_CHARS = '’‘“”—–…'
+
+/** Whitespace AND `DROPPABLE_PUNCTUATION` collapsed away — the shared
+ *  normalization every echo comparison in this file goes through, so
+ *  neither a soft line-wrap nor a terminal-dropped character can ever be
+ *  the difference between "this is still the echo" and "this is new
+ *  content". */
+function flattenForEchoMatch(text: string): string {
+  return text.replace(DROPPABLE_PUNCTUATION, '').replace(/\s+/g, '')
 }
 
 /** True if `candidateAfterArrow` (already stripped of a leading "> ") is
@@ -158,12 +230,42 @@ function normalizeForEchoMatch(text: string): string {
  *  wrap) and a short prompt fully contained in a padded candidate line
  *  match correctly. */
 function looksLikePromptEcho(candidateAfterArrow: string, prompt: string): boolean {
-  const candidate = normalizeForEchoMatch(candidateAfterArrow)
-  const expected = normalizeForEchoMatch(prompt)
+  const candidate = flattenForEchoMatch(candidateAfterArrow)
+  const expected = flattenForEchoMatch(prompt)
   if (!candidate || !expected) return false
   const shorterLen = Math.min(candidate.length, expected.length)
   if (shorterLen === 0) return false
   return candidate.slice(0, shorterLen) === expected.slice(0, shorterLen)
+}
+
+/** Strips any recognized chrome prefix (see GENERATING_PREFIX/
+ *  THOUGHT_PROCESS_ARROW_PREFIX's own doc comment) from the front of an
+ *  already-trimmed line, leaving whatever real content follows it — used
+ *  both for an ordinary content row and for the tail end of this turn's own
+ *  echoed prompt, when real chrome/reply text is rendered glued directly
+ *  onto that same row with no newline in between. A no-op (returns `text`
+ *  unchanged) when neither prefix matches. */
+function stripLeadingChrome(text: string): string {
+  return text.replace(GENERATING_PREFIX, '').replace(THOUGHT_PROCESS_ARROW_PREFIX, '').replace(SPINNER_PREFIX, '').trim()
+}
+
+/** Maps a length in `flattenForEchoMatch(raw)` terms back to a real
+ *  character offset into `raw` itself — the column immediately after the
+ *  `flatLen`-th character that survives flattening (i.e. skipping both
+ *  whitespace and DROPPABLE_PUNCTUATION, exactly as flattenForEchoMatch
+ *  does, so the two stay in lockstep). Used to find exactly where, within a
+ *  single screen row, this turn's echoed prompt text ends and whatever
+ *  renders right after it (on that identical row, real captures show — no
+ *  newline guaranteed) begins. */
+function rawColumnAfterFlatPrefix(raw: string, flatLen: number): number {
+  if (flatLen <= 0) return 0
+  let count = 0
+  for (let i = 0; i < raw.length; i++) {
+    if (/\s/.test(raw[i]) || DROPPABLE_PUNCTUATION_CHARS.includes(raw[i])) continue
+    count += 1
+    if (count === flatLen) return i + 1
+  }
+  return raw.length
 }
 
 export class AntigravityClassifier {
@@ -202,6 +304,44 @@ export class AntigravityClassifier {
    *  boolean isn't enough since the echo can be found within the very same
    *  batch emitContent is about to process. */
   private turnEchoLineIndex: number | null = null
+  /** Column offset into the row at `turnEchoLineIndex` where this turn's
+   *  own echoed prompt text ends, when that row also carries real content
+   *  immediately after it with no separating newline — null (the common
+   *  case) when the echo's own last row has nothing else on it, in which
+   *  case emitContent skips that whole row exactly as before. See
+   *  scanForTurnEcho's doc comment for why this can happen: a real captured
+   *  multi-hop handoff prompt's echoed text ran right up against agy's own
+   *  "▸ Thought Process" heading on the very same rendered row. */
+  private turnEchoSplitCol: number | null = null
+  /** True once this turn's ENTIRE echoed prompt has been matched against
+   *  the screen — as opposed to `sawTurnEcho`, which only means the anchor
+   *  ("> " + the prompt's own first line) has been found. CRITICAL (real
+   *  bug fix, proven via a real captured Codex -> Antigravity handoff with a
+   *  genuinely long, multi-paragraph continuation prompt): consuming the
+   *  echo used to happen in a single pass, the moment the anchor was found,
+   *  then `sawTurnEcho` latched true and scanForTurnEcho never ran again for
+   *  the rest of the turn. For a short prompt the whole echo is already on
+   *  screen by the time any snapshot is stable enough to classify, so that
+   *  was invisible in testing — but a long prompt's own tail can still be
+   *  mid-render (agy hasn't finished laying out that big a paste yet) at the
+   *  moment the FIRST idle-debounced snapshot fires. That first pass then
+   *  consumed only as much of the echo as had rendered by then, and because
+   *  nothing ever re-attempted consumption afterward, every later line of
+   *  the SAME still-unconsumed echo was fed straight into emitContent as if
+   *  it were the assistant's own reply — confirmed live: a real reply
+   *  persisted with "Continuing from a Codex conversation (...). Prior work
+   *  completed: ..." — the tail half of the delivered prompt — glued onto
+   *  the front of it. Fixed by letting consumption resume on every
+   *  subsequent scanForTurnEcho call (see consumedEchoFlat) until the whole
+   *  prompt is accounted for, not just once. */
+  private echoFullyConsumed = false
+  /** Whitespace-stripped text of the echo matched SO FAR this turn — the
+   *  running progress consumption resumes from on each call, once the
+   *  anchor is found but before `echoFullyConsumed` (see its doc comment).
+   *  Reset (to the anchor line's own content) the moment the anchor is
+   *  found; otherwise only ever grows, matching the immediately-following
+   *  portion of `expectedPrompt`. */
+  private consumedEchoFlat = ''
   /** Trimmed content of every line already turned into a real event
    *  (prose/thought/tool-activity) so far — process-lifetime (not reset per
    *  turn). CRITICAL (real bug fix — see this file's module comment): since
@@ -270,6 +410,9 @@ export class AntigravityClassifier {
     this.expectedPrompt = ''
     this.lastConsumedEchoIndex = null
     this.turnEchoLineIndex = null
+    this.turnEchoSplitCol = null
+    this.echoFullyConsumed = false
+    this.consumedEchoFlat = ''
     this.classifiedLineContents = new Set()
     this.expectingThoughtLabel = false
     this.turnReadySignaled = false
@@ -291,6 +434,9 @@ export class AntigravityClassifier {
     this.sawTurnEcho = false
     this.expectedPrompt = prompt
     this.turnEchoLineIndex = null
+    this.turnEchoSplitCol = null
+    this.echoFullyConsumed = false
+    this.consumedEchoFlat = ''
     this.sawBusyThisTurn = false
     this.turnStartedAtMs = Date.now()
     this.requiresEcho = options?.requiresEcho ?? true
@@ -301,20 +447,103 @@ export class AntigravityClassifier {
    *  watermark can't be used here. Bounded below by lastConsumedEchoIndex
    *  (falling back to 0 if the buffer has since shrunk below it — see its
    *  doc comment) so a prior turn's own — possibly textually identical —
-   *  echo is never mistaken for this turn's. */
+   *  echo is never mistaken for this turn's.
+   *
+   *  CRITICAL (real bug fix, proven via a real captured Codex -> Antigravity
+   *  handoff session — see echoFullyConsumed's own doc comment for the full
+   *  story): a long, multi-paragraph prompt's echo can still be PARTIALLY
+   *  rendered — agy genuinely hasn't finished laying out that big a paste
+   *  yet — at the moment the first idle-debounced snapshot is stable enough
+   *  to classify. Consumption therefore RESUMES on every call (bounded by
+   *  echoFullyConsumed, not a one-shot flag), continuing from
+   *  consumedEchoFlat/turnEchoLineIndex's last position, until the entire
+   *  expected prompt has genuinely been matched against the screen — not
+   *  just once, whatever happened to be on screen the very first time an
+   *  anchor was found.
+   *
+   *  Matched via flattenForEchoMatch against however much of the expected
+   *  prompt hasn't been matched yet, so neither the prompt's own line breaks,
+   *  the terminal's column-width soft-wrapping (which can split a single
+   *  word across two rows — confirmed in a real capture:
+   *  "...Get-ChildItem -\nForce'"), nor a character agy's own rendering
+   *  dropped entirely (see DROPPABLE_PUNCTUATION's doc comment) affect the
+   *  result. Consumption can end MID-ROW rather than only at a row boundary
+   *  — a real capture's own boundary row read "...(failed 5 times)▸ Thought
+   *  Process" with no separator between the prompt's last character and
+   *  agy's own chrome — recorded via turnEchoSplitCol so emitContent can
+   *  keep suppressing the echo half of that row while still processing
+   *  whatever renders right after it. */
   private scanForTurnEcho(lines: string[]): void {
-    if (this.sawTurnEcho) return
-    const lowerBound =
-      this.lastConsumedEchoIndex !== null && lines.length > this.lastConsumedEchoIndex ? this.lastConsumedEchoIndex + 1 : 0
-    for (let i = lowerBound; i < lines.length; i++) {
-      const trimmed = lines[i].trim()
-      if (!ECHO_LINE.test(trimmed)) continue
-      if (looksLikePromptEcho(trimmed.replace(ECHO_LINE, ''), this.expectedPrompt)) {
+    const expectedFlat = flattenForEchoMatch(this.expectedPrompt)
+
+    if (!this.sawTurnEcho) {
+      const lowerBound =
+        this.lastConsumedEchoIndex !== null && lines.length > this.lastConsumedEchoIndex ? this.lastConsumedEchoIndex + 1 : 0
+
+      for (let i = lowerBound; i < lines.length; i++) {
+        const trimmed = lines[i].trim()
+        if (!ECHO_LINE.test(trimmed)) continue
+        const afterArrow = trimmed.replace(ECHO_LINE, '')
+        if (!looksLikePromptEcho(afterArrow, this.expectedPrompt)) continue
+
         this.sawTurnEcho = true
         this.turnEchoLineIndex = i
+        this.turnEchoSplitCol = null
         this.lastConsumedEchoIndex = i
-        return
+        this.consumedEchoFlat = flattenForEchoMatch(afterArrow)
+        this.echoFullyConsumed = this.consumedEchoFlat.length >= expectedFlat.length
+        break
       }
+    }
+
+    if (!this.sawTurnEcho || this.echoFullyConsumed || this.turnEchoLineIndex === null) return
+
+    let j = this.turnEchoLineIndex + 1
+    while (j < lines.length) {
+      const remaining = expectedFlat.slice(this.consumedEchoFlat.length)
+      if (remaining.length === 0) {
+        this.echoFullyConsumed = true
+        break
+      }
+      const candidateFlat = flattenForEchoMatch(lines[j])
+      if (candidateFlat.length === 0) {
+        // A blank row can legitimately appear inside the echo (one of the
+        // prompt's own paragraph breaks) — consumed as a no-op.
+        this.turnEchoLineIndex = j
+        this.turnEchoSplitCol = null
+        this.lastConsumedEchoIndex = j
+        j += 1
+        continue
+      }
+      if (remaining.startsWith(candidateFlat)) {
+        // The whole row is still genuinely part of the echo; more remains.
+        this.consumedEchoFlat += candidateFlat
+        this.turnEchoLineIndex = j
+        this.turnEchoSplitCol = null
+        this.lastConsumedEchoIndex = j
+        if (this.consumedEchoFlat.length >= expectedFlat.length) {
+          this.echoFullyConsumed = true
+          break
+        }
+        j += 1
+        continue
+      }
+      if (candidateFlat.startsWith(remaining)) {
+        // The prompt's own text ends partway through this row — real
+        // content (chrome or the actual reply) begins immediately after it
+        // on the same row, possibly with no separating whitespace.
+        this.consumedEchoFlat = expectedFlat
+        this.turnEchoLineIndex = j
+        const cut = rawColumnAfterFlatPrefix(lines[j], remaining.length)
+        this.turnEchoSplitCol = cut < lines[j].length ? cut : null
+        this.lastConsumedEchoIndex = j
+        this.echoFullyConsumed = true
+      }
+      // Either the split above just handled it, or this row doesn't
+      // (yet — it may simply not have rendered completely yet) continue the
+      // match — either way, stop for THIS call; a still-incomplete
+      // consumption picks back up from here on the next classify() call.
+      break
     }
   }
 
@@ -424,19 +653,38 @@ export class AntigravityClassifier {
     }
 
     for (let offset = 0; offset < rawLines.length; offset++) {
-      const trimmed = rawLines[offset].trim()
+      const absoluteIndex = startIndex + offset
 
       // Chrome (startup banner on turn 1; potentially leftover/redrawn
       // chrome from the previous turn's idle screen on turn 2+) up to and
-      // including this turn's own echoed prompt line stays suppressed —
-      // everything at or before turnEchoLineIndex, whether that's from an
-      // earlier batch or this very one.
-      if (this.turnEchoLineIndex === null || startIndex + offset <= this.turnEchoLineIndex) continue
+      // including this turn's own echoed prompt stays suppressed —
+      // everything before turnEchoLineIndex, whether that's from an earlier
+      // batch or this very one.
+      if (this.turnEchoLineIndex === null || absoluteIndex < this.turnEchoLineIndex) continue
+
+      // The row the echo itself ends on gets special handling: normally
+      // (turnEchoSplitCol null) it's entirely echo, same as every row
+      // before it. But see scanForTurnEcho's doc comment — real content can
+      // render on this exact same row immediately after the echo's last
+      // character, with no newline in between, in which case only the
+      // portion from turnEchoSplitCol onward is genuinely new content.
+      let effectiveLine = rawLines[offset]
+      if (absoluteIndex === this.turnEchoLineIndex) {
+        if (this.turnEchoSplitCol === null) continue
+        effectiveLine = rawLines[offset].slice(this.turnEchoSplitCol)
+      }
+
+      // Chrome that can render glued directly onto the front of real
+      // content on the same row (see GENERATING_PREFIX/
+      // THOUGHT_PROCESS_ARROW_PREFIX's doc comment) is stripped before
+      // anything else, so every check below sees only genuine content.
+      const trimmed = stripLeadingChrome(effectiveLine.trim())
 
       if (trimmed === '') continue
       if (SEPARATOR_LINE.test(trimmed) || FOOTER_LINE.test(trimmed) || ECHO_LINE.test(trimmed)) continue
-      if (BUSY_FOOTER_LINE.test(trimmed) || CSAT_SURVEY_LINE.test(trimmed) || GENERATING_LINE.test(trimmed)) continue
-      if (RESUME_COMMAND_LINE.test(trimmed)) continue
+      if (BUSY_FOOTER_LINE.test(trimmed) || CSAT_SURVEY_LINE.test(trimmed)) continue
+      if (RESUME_COMMAND_LINE.test(trimmed) || THOUGHT_PROCESS_BARE_LINE.test(trimmed)) continue
+      if (ELAPSED_TIME_LINE.test(trimmed)) continue
 
       // CRITICAL (real bug fix): combined into one check, and always resets
       // the flag — a standalone THOUGHT_SUBTITLE_LINE match must reset

@@ -134,13 +134,17 @@ app.whenReady().then(async () => {
 
   // Same warm-cache treatment for Claude's reasoning-effort catalogue
   // (Query.supportedModels()) — no specific workspace is open yet this
-  // early, so process.cwd() stands in (supportedModels() doesn't depend on
-  // which workspace is active; it's account/plan-scoped).
+  // early, so the user's home directory stands in (supportedModels()
+  // doesn't depend on which workspace is active; it's account/plan-scoped).
+  // CRITICAL (portability fix): NOT process.cwd() — for a packaged app
+  // launched from the Start Menu that resolves to an unpredictable
+  // directory (often the install location itself, which a per-user install
+  // may not have write access inside), unlike app.getPath('home').
   void (async () => {
     const customPath = settingsService.get().agents['claude-code'].customPath
     const detection = await detectionService.detect('claude-code', customPath).catch(() => null)
     if (detection?.installed && detection.executablePath) {
-      const cwd = workspaceService.getCurrent()?.path ?? process.cwd()
+      const cwd = workspaceService.getCurrent()?.path ?? app.getPath('home')
       await claudeModelCatalogService.refresh(detection.executablePath, cwd).catch(() => {})
     }
   })()

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { statSync } from 'node:fs'
 import type { AgentId, CreateSessionInput, LaunchTerminalResult, Session, SessionWithMessages } from '@shared/types'
 import type { AgentChoice, AgentEvent } from '@shared/events/agent-event'
 import type { TraceEvent } from '@shared/events/trace-event'
@@ -96,7 +97,7 @@ export const sessionService = {
     return { ...session, messages: messageRepo.listBySession(sessionId) }
   },
 
-  async sendPrompt(sessionId: string, text: string, turnId: string, images?: string[]): Promise<void> {
+  async sendPrompt(sessionId: string, text: string, turnId: string, images?: string[], displayText?: string): Promise<void> {
     if (process.env['AGENTDOCK_DEBUG_RAW_PTY']) {
       console.log(`[session:senddebug] sendPrompt called t=${Date.now()} sessionId=${sessionId} turnId=${turnId} text=${JSON.stringify(text)}`)
     }
@@ -106,13 +107,38 @@ export const sessionService = {
     // One-time, best-effort — only while the title is still the untouched
     // generic placeholder (see TitleSource's doc comment). A derivation
     // failure (no meaningful text to extract from, e.g. a bare "hi") just
-    // leaves the placeholder in place rather than blocking the send.
+    // leaves the placeholder in place rather than blocking the send. Prefers
+    // displayText (the user's own typed task) over the full delivered text
+    // so a title generated from some OTHER first message never picks up a
+    // handoff's continuation-envelope wording — moot in practice today since
+    // handoff-created sessions are always titleSource 'handoff' already
+    // (see handoff-service.ts), never 'default', but keeps this correct
+    // regardless of that.
     if (session.titleSource === 'default') {
-      const derived = deriveTitleFromPrompt(text)
+      const derived = deriveTitleFromPrompt(displayText ?? text)
       if (derived) sessionRepo.setTitle(sessionId, derived, 'generated')
     }
 
-    messageRepo.add(sessionId, 'user', { kind: 'text', text, images: images && images.length > 0 ? images : undefined })
+    // CRITICAL (real bug fix — root cause of a handoff continuation's full
+    // internal prompt, including its "--- Continuation context ---"
+    // envelope, workspace paths, prior actions, and previous responses,
+    // being shown verbatim in the user's own chat bubble, persisted, and
+    // surviving both a session switch and an app restart): this used to
+    // persist `text` — the complete delivered prompt — as the ONLY record
+    // of the user message, with no separate concept of what the user
+    // actually typed. `displayText` (see MessageContent's own doc comment),
+    // when the caller supplies it, is persisted alongside `text` instead:
+    // the delivered prompt is unchanged and still reaches the agent exactly
+    // as before, but the renderer's bubble (via AgentEventReducer's
+    // sessionMessageToChatItem) shows displayText instead once this same
+    // row is what gets read back — including on the very first load, no
+    // reload/refresh required.
+    messageRepo.add(sessionId, 'user', {
+      kind: 'text',
+      text,
+      displayText,
+      images: images && images.length > 0 ? images : undefined
+    })
     sessionRepo.setStatus(sessionId, 'running')
 
     let run = running.get(sessionId)
@@ -123,6 +149,15 @@ export const sessionService = {
     // one-shot `exec` process has already exited by the time the next
     // prompt arrives, so it alone spawns fresh every turn.
     if (!run || !run.handle.isRunning) {
+      const workspacePath = workspacePathFor(session.workspaceId)
+      const workspaceError = validateWorkspacePath(workspacePath)
+      if (workspaceError) {
+        messageRepo.add(sessionId, 'error', { kind: 'text', text: workspaceError })
+        broadcastEvent(sessionId, { type: 'turn_failed', sessionId, turnId, reason: workspaceError })
+        sessionRepo.setStatus(sessionId, 'error')
+        throw new Error(workspaceError)
+      }
+
       const settings = settingsService.get()
       const agentSettings = settings.agents[session.agentId]
       const detection = await detectionService.detect(session.agentId, agentSettings.customPath)
@@ -141,7 +176,7 @@ export const sessionService = {
       const adapter = getAdapter(session.agentId)
       const handle = adapter.start({
         session,
-        workspacePath: workspacePathFor(session.workspaceId),
+        workspacePath,
         nativeSessionId: sessionRepo.getNativeSessionId(sessionId),
         permissionMode: agentSettings.permissionMode,
         executablePath: detection.executablePath,
@@ -346,6 +381,12 @@ export const sessionService = {
     const session = sessionRepo.get(sessionId)
     if (!session) throw new Error('Session not found.')
 
+    const workspacePath = workspacePathFor(session.workspaceId)
+    const workspaceError = validateWorkspacePath(workspacePath)
+    if (workspaceError) {
+      return { launched: false, method: null, command: '', error: workspaceError }
+    }
+
     const settings = settingsService.get()
     const agentSettings = settings.agents[session.agentId]
     const detection = await detectionService.detect(session.agentId, agentSettings.customPath)
@@ -357,7 +398,7 @@ export const sessionService = {
     return launchExternalTerminal({
       agentId: session.agentId,
       executablePath: detection.executablePath,
-      workspacePath: workspacePathFor(session.workspaceId),
+      workspacePath,
       permissionMode: agentSettings.permissionMode,
       nativeSessionId: sessionRepo.getNativeSessionId(sessionId)
     })
@@ -433,6 +474,37 @@ function workspacePathFor(workspaceId: string): string {
   const workspace = workspaceRepo.get(workspaceId)
   if (!workspace) throw new Error('Workspace not found.')
   return workspace.path
+}
+
+/** A saved project's folder can go stale between the time it was added and
+ *  the time a session actually tries to use it again — moved, deleted, on a
+ *  drive that's no longer mounted, or permission-restricted. Nothing
+ *  upstream of this ever re-checks that (workspaceRepo just stores whatever
+ *  path was picked once), so without this an agent would be spawned with a
+ *  `cwd` that doesn't exist — surfacing, if at all, as an opaque native
+ *  spawn error deep inside node-pty/child_process rather than a clear,
+ *  actionable message, and in the worst case leaving the turn stuck
+ *  "Working…" forever with no failure ever reported. Returns a
+ *  user-facing message when the path can't be used, or null when it's a
+ *  real, accessible directory. */
+function validateWorkspacePath(path: string): string | null {
+  let stat
+  try {
+    stat = statSync(path)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') {
+      return `The project folder "${path}" could not be found. It may have been moved, renamed, or deleted — remove this project or reopen it from its new location.`
+    }
+    if (code === 'EACCES' || code === 'EPERM') {
+      return `AgentDock does not have permission to access "${path}". Check the folder's permissions and try again.`
+    }
+    return `The project folder "${path}" could not be accessed (${code ?? (err instanceof Error ? err.message : String(err))}).`
+  }
+  if (!stat.isDirectory()) {
+    return `"${path}" is not a folder. Remove this project or select a valid folder.`
+  }
+  return null
 }
 
 function agentDisplay(agentId: AgentId): string {

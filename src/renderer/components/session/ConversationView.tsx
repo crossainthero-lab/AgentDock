@@ -105,7 +105,7 @@ export function ConversationView({
               <MessageBubble
                 key={item.id}
                 role="user"
-                text={item.text}
+                text={item.displayText ?? item.text}
                 images={item.images}
                 sessionId={sessionId}
                 attachmentBackend={attachmentBackend}

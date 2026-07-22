@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import { IpcChannels } from '@shared/ipc-channels'
 import type { AgentModelOption } from '@shared/types'
 import { claudeModelCatalogService } from '../services/claude-model-catalog-service'
@@ -9,9 +9,15 @@ import { workspaceService } from '../services/workspace-service'
 /** The reasoning-effort catalogue isn't tied to any specific session or
  *  workspace (it's account/plan-scoped), but Query() still requires a
  *  cwd — the currently open workspace if there is one, otherwise the
- *  process's own directory as a harmless fallback. */
+ *  user's own home directory as a harmless fallback. CRITICAL (portability
+ *  fix): this used to fall back to `process.cwd()`, which for a packaged
+ *  app launched from the Start Menu/a shortcut is unpredictable — often the
+ *  install directory itself (e.g. under `Program Files`), which a
+ *  non-elevated per-user install may not even be able to read/write inside.
+ *  `app.getPath('home')` is always a real, resolvable, per-user directory
+ *  regardless of where AgentDock is installed or how it was launched. */
 function catalogCwd(): string {
-  return workspaceService.getCurrent()?.path ?? process.cwd()
+  return workspaceService.getCurrent()?.path ?? app.getPath('home')
 }
 
 export function registerClaudeIpc(): void {

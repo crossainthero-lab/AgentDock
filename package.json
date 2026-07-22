@@ -16,7 +16,8 @@
     "native:check": "node scripts/native-check.js",
     "test:pty": "node scripts/pty-smoke-runner.js",
     "test:e2e:antigravity": "node scripts/e2e-antigravity-smoke.cjs",
-    "package": "npm run build && electron-builder --dir"
+    "package": "npm run build && electron-builder --dir",
+    "package:win": "npm run build && electron-builder --win --x64"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.214",

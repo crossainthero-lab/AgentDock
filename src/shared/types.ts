@@ -83,7 +83,19 @@ export type MessageRole = 'user' | 'assistant' | 'system' | 'error' | 'approval'
 export type MessageContent =
   | {
       kind: 'text'
+      /** The full content actually delivered to the agent — for a handoff
+       *  continuation this includes the "--- Continuation context ---"
+       *  envelope (workspace, prior work, files changed, unresolved
+       *  issues); see handoff-service.ts's buildContinuationPrompt. Always
+       *  what gets sent over the wire/PTY; `displayText`, when present, is
+       *  what the user actually sees instead. */
       text: string
+      /** User role only. When present, this — not `text` — is what the
+       *  chat bubble renders: the task the user actually typed, without the
+       *  internal continuation envelope prepended to `text`. Absent for an
+       *  ordinary (non-handoff) message, where `text` alone is both what
+       *  was typed and what was sent, so there's nothing to distinguish. */
+      displayText?: string
       /** Absolute paths into this session's own persistent attachment
        *  directory (see codex-attachment-service.ts) — Codex sessions
        *  only. Never a workspace-relative path, never base64 embedded

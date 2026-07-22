@@ -89,6 +89,59 @@ describe('immediate user message', () => {
   })
 })
 
+describe('displayText — handoff continuation bubble shows only the user-typed task', () => {
+  it('beginSend renders displayText for the bubble while text keeps the full delivered prompt', () => {
+    let state = createReducerState()
+    const fullPrompt = 'Add a daily focus timer.\n\n--- Continuation context ---\nWorkspace: C:\\project\n...'
+    state = beginSend(state, {
+      sessionId: SESSION_ID,
+      userMessageId: 'u:t1',
+      turnId: 't1',
+      text: fullPrompt,
+      displayText: 'Add a daily focus timer.',
+      agentDisplayName: 'Antigravity'
+    })
+    const user = state.items.find((i) => i.kind === 'user')
+    expect(user).toMatchObject({ text: fullPrompt, displayText: 'Add a daily focus timer.' })
+    // '--- Continuation context ---' must never appear as the ONLY thing a
+    // consumer reads if it only looks at displayText, the field a renderer
+    // should actually show.
+    expect((user as { displayText?: string }).displayText).not.toContain('--- Continuation context ---')
+  })
+
+  it('an ordinary (non-handoff) send has no displayText at all — text alone is what was typed and delivered', () => {
+    let state = createReducerState()
+    state = send(state, 'a normal message')
+    const user = state.items.find((i) => i.kind === 'user')
+    expect((user as { displayText?: string }).displayText).toBeUndefined()
+  })
+
+  it('seedFromPersisted (a session reload / app restart / session switch) reconstructs displayText from persisted history, not just text', () => {
+    const fullPrompt = 'Add a daily focus timer.\n\n--- Continuation context ---\nWorkspace: C:\\project\n...'
+    const persisted: SessionMessage[] = [
+      {
+        id: 'm1',
+        sessionId: SESSION_ID,
+        role: 'user',
+        content: { kind: 'text', text: fullPrompt, displayText: 'Add a daily focus timer.' },
+        createdAt: new Date(0).toISOString()
+      }
+    ]
+    const state = seedFromPersisted(persisted)
+    const user = state.items.find((i) => i.kind === 'user')
+    expect(user).toMatchObject({ text: fullPrompt, displayText: 'Add a daily focus timer.' })
+  })
+
+  it('a plain persisted user message (no displayText ever recorded) reconstructs with displayText undefined, not an accidental empty string', () => {
+    const persisted: SessionMessage[] = [
+      { id: 'm1', sessionId: SESSION_ID, role: 'user', content: { kind: 'text', text: 'plain message' }, createdAt: new Date(0).toISOString() }
+    ]
+    const state = seedFromPersisted(persisted)
+    const user = state.items.find((i) => i.kind === 'user')
+    expect((user as { displayText?: string }).displayText).toBeUndefined()
+  })
+})
+
 describe('assistant reply appears exactly once', () => {
   it('streams multiple deltas of one response into a single stable assistant item, addressed by messageId', () => {
     let state = createReducerState()

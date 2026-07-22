@@ -152,8 +152,11 @@ export interface AgentDockApi {
      *  AgentEventReducer's `isForActiveTurn`). `images` is a Codex-only
      *  concept — absolute paths already saved into this session's
      *  attachment storage (see codex.saveAttachmentFrom*) — silently
-     *  ignored by every other agent. */
-    sendPrompt(sessionId: string, text: string, turnId: string, images?: string[]): Promise<void>
+     *  ignored by every other agent. `displayText`, when given, is what
+     *  gets persisted/rendered as the user bubble instead of `text` — see
+     *  MessageContent's own doc comment; `text` is still exactly what's
+     *  delivered to the agent. */
+    sendPrompt(sessionId: string, text: string, turnId: string, images?: string[], displayText?: string): Promise<void>
     interrupt(sessionId: string): Promise<void>
     stop(sessionId: string): Promise<void>
     delete(sessionId: string): Promise<void>

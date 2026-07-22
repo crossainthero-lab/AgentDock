@@ -1,6 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { AgentEvent } from '../../src/shared/events/agent-event'
 import type { AgentDetection } from '../../src/shared/types'
+
+// A real, always-existing directory (unlike a fake "/tmp/project" path) —
+// session-service.sendPrompt now validates the workspace path is a real,
+// accessible directory before starting an agent (see
+// validateWorkspacePath's own doc comment), so every test below that
+// exercises sendPrompt needs a workspace path that genuinely exists on
+// whatever machine/OS runs this suite.
+const FAKE_WORKSPACE_PATH = tmpdir()
 
 // titleSource defaults to 'manual' here specifically so the large majority
 // of tests below (which have nothing to do with titling) never trigger the
@@ -37,7 +48,7 @@ vi.mock('../../src/main/db/repositories/message-repo', () => ({
   messageRepo: { add: messageRepoAdd, listBySession: vi.fn(() => []) }
 }))
 vi.mock('../../src/main/db/repositories/workspace-repo', () => ({
-  workspaceRepo: { get: vi.fn(() => ({ id: 'w1', path: '/tmp/project' })) }
+  workspaceRepo: { get: vi.fn(() => ({ id: 'w1', path: FAKE_WORKSPACE_PATH })) }
 }))
 vi.mock('../../src/main/services/settings-service', () => ({
   settingsService: {
@@ -102,6 +113,7 @@ vi.mock('../../src/main/agents/adapter-registry', () => ({
 
 import { sessionService } from '../../src/main/services/session-service'
 import { detectionService } from '../../src/main/services/detection-service'
+import { workspaceRepo } from '../../src/main/db/repositories/workspace-repo'
 
 describe('sessionService — delivery and event sequencing', () => {
   beforeEach(() => {
@@ -133,6 +145,40 @@ describe('sessionService — delivery and event sequencing', () => {
     unsubscribe()
   })
 
+  it(
+    'CRITICAL (real bug fix): persists displayText alongside the full delivered text, without ' +
+      'altering what the transport actually receives',
+    async () => {
+      const fullPrompt = 'Add a daily focus timer.\n\n--- Continuation context ---\nWorkspace: C:\\project\n...'
+      await sessionService.sendPrompt('s-display', fullPrompt, 't1', undefined, 'Add a daily focus timer.')
+
+      // The transport (what actually reaches the agent) is always the full,
+      // unmodified text — displayText exists purely for how the message is
+      // shown/persisted, never for what gets delivered.
+      expect(fakeHandle.send).toHaveBeenCalledWith(fullPrompt, 't1', undefined)
+      // The persisted row carries BOTH: `text` is still the full delivered
+      // prompt (so re-sending/regenerating history stays correct), and
+      // `displayText` is the clean, user-authored task the bubble should
+      // show instead.
+      expect(messageRepoAdd).toHaveBeenCalledWith('s-display', 'user', {
+        kind: 'text',
+        text: fullPrompt,
+        displayText: 'Add a daily focus timer.',
+        images: undefined
+      })
+    }
+  )
+
+  it('omits displayText entirely for an ordinary (non-handoff) message — text alone is both what was typed and delivered', async () => {
+    await sessionService.sendPrompt('s-ordinary', 'just a normal message', 't1')
+    expect(messageRepoAdd).toHaveBeenCalledWith('s-ordinary', 'user', {
+      kind: 'text',
+      text: 'just a normal message',
+      displayText: undefined,
+      images: undefined
+    })
+  })
+
   it('rejects (rather than silently resolving) when the agent genuinely cannot be reached', async () => {
     vi.mocked(detectionService.detect).mockResolvedValueOnce({
       agentId: 'claude-code',
@@ -149,6 +195,71 @@ describe('sessionService — delivery and event sequencing', () => {
     // knowledge of *delivery* is what needed to change here.
     expect(messageRepoAdd).toHaveBeenCalledWith('s-fail', 'user', { kind: 'text', text: 'hello' })
     expect(messageRepoAdd).toHaveBeenCalledWith('s-fail', 'error', { kind: 'text', text: 'Claude Code is not installed.' })
+  })
+
+  describe('workspace path validation (Windows portability: a saved project folder can be moved/deleted/inaccessible)', () => {
+    it('CRITICAL (portability fix): rejects with a clear error, never spawns the agent, when the saved workspace folder no longer exists', async () => {
+      const missingPath = join(FAKE_WORKSPACE_PATH, 'this-folder-does-not-exist-' + Date.now())
+      vi.mocked(workspaceRepo.get).mockReturnValueOnce({ id: 'w1', path: missingPath } as ReturnType<typeof workspaceRepo.get>)
+
+      await expect(sessionService.sendPrompt('s-missing-ws', 'hello', 't1')).rejects.toThrow(/could not be found/)
+
+      expect(fakeHandle.send).not.toHaveBeenCalled()
+      expect(messageRepoAdd).toHaveBeenCalledWith('s-missing-ws', 'error', {
+        kind: 'text',
+        text: expect.stringContaining('could not be found')
+      })
+    })
+
+    it('rejects with a clear error when the saved workspace path is a file, not a folder', async () => {
+      const filePath = join(FAKE_WORKSPACE_PATH, 'not-a-folder-' + Date.now() + '.txt')
+      writeFileSync(filePath, 'not a directory')
+      try {
+        vi.mocked(workspaceRepo.get).mockReturnValueOnce({ id: 'w1', path: filePath } as ReturnType<typeof workspaceRepo.get>)
+        await expect(sessionService.sendPrompt('s-file-ws', 'hello', 't1')).rejects.toThrow(/is not a folder/)
+        expect(fakeHandle.send).not.toHaveBeenCalled()
+      } finally {
+        rmSync(filePath, { force: true })
+      }
+    })
+
+    it('proceeds normally (no false-positive rejection) when the workspace folder genuinely exists, including a path with spaces and Unicode characters', async () => {
+      const unicodeDir = join(FAKE_WORKSPACE_PATH, 'My Projéct 日本語 ' + Date.now())
+      mkdirSync(unicodeDir, { recursive: true })
+      try {
+        vi.mocked(workspaceRepo.get).mockReturnValueOnce({ id: 'w1', path: unicodeDir } as ReturnType<typeof workspaceRepo.get>)
+        await expect(sessionService.sendPrompt('s-unicode-ws', 'hello', 't1')).resolves.toBeUndefined()
+        expect(fakeHandle.send).toHaveBeenCalledTimes(1)
+      } finally {
+        rmSync(unicodeDir, { recursive: true, force: true })
+      }
+    })
+
+    // Never assumes the user profile / a project lives on C: — proves it
+    // against a REAL second drive when this machine happens to have one
+    // (skips cleanly, rather than faking a drive letter, when it doesn't;
+    // the important thing being verified is that validateWorkspacePath's
+    // own logic — a plain statSync call — never special-cases any specific
+    // drive letter, which the Windows-portability audit already confirmed
+    // is true of every path in src/main).
+    const secondDrive = ['D:\\', 'E:\\', 'F:\\'].find((d) => {
+      try {
+        return statSync(d).isDirectory()
+      } catch {
+        return false
+      }
+    })
+    it.skipIf(!secondDrive)('works correctly for a workspace on a non-C: drive', async () => {
+      const dir = join(secondDrive as string, 'agentdock-portability-test-' + Date.now())
+      mkdirSync(dir, { recursive: true })
+      try {
+        vi.mocked(workspaceRepo.get).mockReturnValueOnce({ id: 'w1', path: dir } as ReturnType<typeof workspaceRepo.get>)
+        await expect(sessionService.sendPrompt('s-other-drive-ws', 'hello', 't1')).resolves.toBeUndefined()
+        expect(fakeHandle.send).toHaveBeenCalledTimes(1)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
   })
 
   it('turn_completed persists the transport\'s real native session id, agent-agnostically', async () => {
@@ -382,6 +493,15 @@ describe('sessionService.sendPrompt — automatic title generation on the first 
     sessionRow.titleSource = 'default'
     await sessionService.sendPrompt('s1', '??', 't1')
     expect(sessionRepoSetTitle).not.toHaveBeenCalled()
+  })
+
+  it('derives the title from displayText, not the full delivered text, when the two differ', async () => {
+    sessionRow.titleSource = 'default'
+    // Deliberately different first lines, so this test actually
+    // discriminates which one deriveTitleFromPrompt reads from.
+    const fullPrompt = 'Internal continuation preamble the user never wrote.\n\nReal task follows.'
+    await sessionService.sendPrompt('s1', fullPrompt, 't1', undefined, 'Add a daily focus timer.')
+    expect(sessionRepoSetTitle).toHaveBeenCalledWith('s1', 'Add a daily focus timer', 'generated')
   })
 })
 

@@ -62,7 +62,20 @@ export interface AgentTurn {
 }
 
 export type ChatItem =
-  | { kind: 'user'; id: string; text: string; images?: string[]; deliveryState: DeliveryState; createdAt: number }
+  | {
+      kind: 'user'
+      id: string
+      text: string
+      /** The user-typed task alone, when this message's delivered `text`
+       *  carries additional internal context (a handoff continuation
+       *  envelope) the user never wrote — see MessageContent's own doc
+       *  comment. Renderers should always prefer this over `text` when
+       *  present. */
+      displayText?: string
+      images?: string[]
+      deliveryState: DeliveryState
+      createdAt: number
+    }
   | { kind: 'assistant'; id: string; text: string; responseImages?: string[]; createdAt: number }
   | { kind: 'system'; id: string; role: 'system' | 'error'; text: string; createdAt: number }
   | {
@@ -159,7 +172,16 @@ function sessionMessageToChatItem(m: SessionMessage): ChatItem | null {
   const content: MessageContent = m.content
   switch (content.kind) {
     case 'text':
-      if (m.role === 'user') return { kind: 'user', id: m.id, text: content.text, images: content.images, deliveryState: 'sent', createdAt }
+      if (m.role === 'user')
+        return {
+          kind: 'user',
+          id: m.id,
+          text: content.text,
+          displayText: content.displayText,
+          images: content.images,
+          deliveryState: 'sent',
+          createdAt
+        }
       if (m.role === 'error') return { kind: 'system', id: m.id, role: 'error', text: content.text, createdAt }
       if (m.role === 'system') return { kind: 'system', id: m.id, role: 'system', text: content.text, createdAt }
       return { kind: 'assistant', id: m.id, text: content.text, responseImages: content.responseImages, createdAt }
@@ -216,6 +238,10 @@ export interface BeginSendParams {
   userMessageId: string
   turnId: string
   text: string
+  /** See ChatItem's own doc comment — the user-typed task alone, when it
+   *  differs from the full `text` actually being delivered (a handoff
+   *  continuation). */
+  displayText?: string
   images?: string[]
   agentDisplayName: string
 }
@@ -235,6 +261,7 @@ export function beginSend(state: AgentEventReducerState, params: BeginSendParams
     kind: 'user',
     id: params.userMessageId,
     text: params.text,
+    displayText: params.displayText,
     images: params.images,
     deliveryState: 'sending',
     createdAt: now

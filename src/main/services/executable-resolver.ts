@@ -28,7 +28,7 @@
 // (a real subprocess probe) and rejecting ones that don't work, moving on
 // to the next candidate instead of trusting existsSync alone.
 import { existsSync } from 'node:fs'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 
 export interface CandidateSearchResult {
   /** Every path that exists on disk, in priority order. For a configured
@@ -58,8 +58,10 @@ export interface ResolveResult {
   checked: string[]
   pathDirCount: number
   /** Which strategy produced the winning candidate — logged for diagnostics
-   *  so a resolution decision is never a mystery. */
-  strategy: 'custom-path' | 'path-search' | 'not-found'
+   *  so a resolution decision is never a mystery. 'known-location' is a
+   *  known-install-location fallback (see knownWindowsInstallDirs) — PATH
+   *  search found nothing, but a real standard install directory did. */
+  strategy: 'custom-path' | 'path-search' | 'known-location' | 'not-found'
   /** Candidates that existed on disk but failed real validation — e.g. the
    *  POSIX shell shim case above. Empty when the winning candidate was the
    *  first one tried. */
@@ -132,8 +134,14 @@ function withExtension(candidate: string, ext: string): string {
  *  candidate name already ends with a real extension (e.g. a custom path
  *  of "codex.exe"), appending the bare "" extension resolves to the exact
  *  same string as the .EXE attempt, which would otherwise double-count
- *  the same file as two separate candidates. */
-function findOne(candidate: string, checked: string[]): string[] {
+ *  the same file as two separate candidates.
+ *
+ *  `dirs` is searched in the given order (PATH directories first, then any
+ *  known-install-location fallbacks — see resolveExecutable's own doc
+ *  comment) — trying every extension before moving to the next directory,
+ *  so a real .exe two directories down still beats a bare shim in the
+ *  first directory. */
+function findOne(candidate: string, dirs: string[], checked: string[]): string[] {
   const isWindows = process.platform === 'win32'
   const extensions = isWindows ? windowsExtensions() : ['']
   const found: string[] = []
@@ -156,11 +164,7 @@ function findOne(candidate: string, checked: string[]): string[] {
     return found
   }
 
-  // Bare command name: search every PATH directory (node_modules already
-  // excluded — see pathDirs above), trying every extension before moving
-  // to the next directory, so a real .exe two directories down still beats
-  // a bare shim in the first directory.
-  for (const dir of pathDirs()) {
+  for (const dir of dirs) {
     for (const ext of extensions) {
       tryPath(join(dir, withExtension(candidate, ext)))
     }
@@ -168,15 +172,46 @@ function findOne(candidate: string, checked: string[]): string[] {
   return found
 }
 
-export function findCandidates(candidateNames: string[], customPath: string | null): CandidateSearchResult {
+/** Fixed, non-PATH-dependent directories real installers for these CLIs are
+ *  known to use on Windows (confirmed live on a real machine: Claude under
+ *  `%USERPROFILE%\.local\bin`, Codex under both
+ *  `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` and npm's own global bin dir,
+ *  Antigravity under `%LOCALAPPDATA%\agy\bin`) — tried ONLY as a last
+ *  resort, after PATH search has already failed, for the real case an
+ *  installer placed a CLI in its own standard location without ever adding
+ *  that location to PATH. Deliberately generic (not agent-specific) here:
+ *  the caller supplies whichever of these it wants considered via
+ *  `extraSearchDirs`; this just centralizes the actual directory list so
+ *  every call site stays consistent. */
+export function knownWindowsInstallDirs(): string[] {
+  if (process.platform !== 'win32') return []
+  const home = process.env['USERPROFILE'] ?? ''
+  const localAppData = process.env['LOCALAPPDATA'] ?? ''
+  const appData = process.env['APPDATA'] ?? ''
+  const dirs = [
+    home && join(home, '.local', 'bin'),
+    localAppData && join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin'),
+    localAppData && join(localAppData, 'agy', 'bin'),
+    localAppData && join(localAppData, 'Programs', 'agy', 'bin'),
+    appData && join(appData, 'npm')
+  ]
+  return dirs.filter((d): d is string => !!d)
+}
+
+export function findCandidates(
+  candidateNames: string[],
+  customPath: string | null,
+  extraSearchDirs: string[] = []
+): CandidateSearchResult {
   const checked: string[] = []
   const candidates: string[] = []
+  const searchDirs = [...pathDirs(), ...extraSearchDirs]
 
   if (customPath) {
-    candidates.push(...findOne(customPath, checked))
+    candidates.push(...findOne(customPath, searchDirs, checked))
   } else {
     for (const name of candidateNames) {
-      candidates.push(...findOne(name, checked))
+      candidates.push(...findOne(name, searchDirs, checked))
     }
   }
 
@@ -188,26 +223,33 @@ export function findCandidates(candidateNames: string[], customPath: string | nu
  *  priority order (a real subprocess probe, injected via `validate` so
  *  this stays testable without spawning real processes) and returns the
  *  first one that genuinely works. A candidate that exists but fails
- *  validation is recorded in `rejected` and skipped — never returned. */
+ *  validation is recorded in `rejected` and skipped — never returned.
+ *
+ *  Priority order end to end: (1) `customPath`, when given, is the only
+ *  thing tried — a user-configured override always wins outright; (2) PATH
+ *  directories, in PATH's own order; (3) `extraSearchDirs` (see
+ *  knownWindowsInstallDirs), tried only once every PATH directory has
+ *  already failed — a real install that never touched PATH still gets
+ *  found, but never at the expense of a genuine PATH-resolved match. */
 export async function resolveExecutable(
   candidateNames: string[],
   customPath: string | null,
-  validate: ValidateCandidate
+  validate: ValidateCandidate,
+  extraSearchDirs: string[] = []
 ): Promise<ResolveResult> {
-  const { candidates, checked, pathDirCount } = findCandidates(candidateNames, customPath)
+  const { candidates, checked, pathDirCount } = findCandidates(candidateNames, customPath, extraSearchDirs)
   const rejected: Array<{ path: string; reason: string }> = []
+  const pathDirSet = new Set(pathDirs().map((d) => d.toLowerCase()))
 
   for (const candidate of candidates) {
     const outcome = await validate(candidate)
     if (outcome.ok) {
-      return {
-        resolvedPath: candidate,
-        checked,
-        pathDirCount,
-        strategy: customPath ? 'custom-path' : 'path-search',
-        rejected,
-        output: outcome.output
-      }
+      const strategy: ResolveResult['strategy'] = customPath
+        ? 'custom-path'
+        : pathDirSet.has(dirname(candidate).toLowerCase())
+          ? 'path-search'
+          : 'known-location'
+      return { resolvedPath: candidate, checked, pathDirCount, strategy, rejected, output: outcome.output }
     }
     rejected.push({ path: candidate, reason: outcome.reason ?? 'failed to run' })
   }

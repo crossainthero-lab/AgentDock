@@ -1,8 +1,12 @@
 node_modules/
 out/
 dist/
-build/
 release/
+# NOTE: build/ is intentionally NOT ignored — electron-builder.yml's
+# `directories.buildResources: build` makes it a SOURCE directory (app
+# icon, installer assets), not a build output directory, despite the name.
+# It must be committed or packaging silently falls back to Electron's
+# default icon on every other machine/clone.
 *.log
 .DS_Store
 .env

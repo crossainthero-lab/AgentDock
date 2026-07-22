@@ -320,13 +320,19 @@ export function __resetAllForTests(): void {
  *  call this, since the session must have been opened first). Optimistic
  *  user-message insert happens synchronously, before the IPC round trip,
  *  same guarantee the old component-local implementation made. */
-export async function sendPrompt(sessionId: string, agentId: Session['agentId'], text: string, images?: string[]): Promise<void> {
+export async function sendPrompt(
+  sessionId: string,
+  agentId: Session['agentId'],
+  text: string,
+  images?: string[],
+  displayText?: string
+): Promise<void> {
   const entry = ensureTracked(sessionId)
   const userMessageId = crypto.randomUUID()
   const turnId = crypto.randomUUID()
   const agentDisplayName = AGENT_DISPLAY_NAMES[agentId]
 
-  entry.reducer = beginSend(entry.reducer, { sessionId, userMessageId, turnId, text, images, agentDisplayName })
+  entry.reducer = beginSend(entry.reducer, { sessionId, userMessageId, turnId, text, displayText, images, agentDisplayName })
   pushTrace(entry, sessionId, { kind: 'USER_MESSAGE_CREATED', turnId, eventId: userMessageId })
   pushTrace(entry, sessionId, { kind: 'TURN_CREATED', turnId })
   pushTrace(entry, sessionId, { kind: 'ACTIVITY_CREATED', turnId })
@@ -334,7 +340,7 @@ export async function sendPrompt(sessionId: string, agentId: Session['agentId'],
   notify(entry)
 
   try {
-    await getAgentDock().session.sendPrompt(sessionId, text, turnId, images)
+    await getAgentDock().session.sendPrompt(sessionId, text, turnId, images, displayText)
     const current = entries.get(sessionId)
     if (!current) return
     current.reducer = markSent(current.reducer, userMessageId)
@@ -353,6 +359,13 @@ export async function retryMessage(sessionId: string, agentId: Session['agentId'
   const failed = entry.reducer.items.find((i) => i.id === userMessageId)
   if (!failed || failed.kind !== 'user') return
   const text = failed.text
+  // session-service.sendPrompt persists a fresh user row on every call,
+  // including a retry (see its own messageRepo.add) — so retrying a failed
+  // handoff send must carry the same displayText through again, or that
+  // freshly-persisted row would have only the raw continuation-envelope
+  // text to show, undoing the clean bubble the first attempt already
+  // displayed optimistically.
+  const displayText = failed.displayText
   const turnId = crypto.randomUUID()
   const agentDisplayName = AGENT_DISPLAY_NAMES[agentId]
 
@@ -363,7 +376,7 @@ export async function retryMessage(sessionId: string, agentId: Session['agentId'
   notify(entry)
 
   try {
-    await getAgentDock().session.sendPrompt(sessionId, text, turnId)
+    await getAgentDock().session.sendPrompt(sessionId, text, turnId, undefined, displayText)
     const current = entries.get(sessionId)
     if (!current) return
     current.reducer = markSent(current.reducer, userMessageId)

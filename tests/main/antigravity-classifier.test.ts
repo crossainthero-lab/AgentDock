@@ -329,3 +329,253 @@ describe('AntigravityClassifier (real captures from agy 1.1.1/1.1.2, -i <prompt>
     }
   })
 })
+
+describe('AntigravityClassifier — CLI chrome cleanup (real bug fix, reproduced from a real captured Claude -> Codex -> Antigravity FocusBoard handoff)', () => {
+  // The real captured incident: a multi-paragraph handoff continuation
+  // prompt (workspace path, "Prior work completed", files changed — see
+  // handoff-service.ts's buildContinuationPrompt) got echoed back by agy
+  // across MANY terminal rows, not just the one row containing "> " — every
+  // row after the first was fed straight into the persisted ASSISTANT
+  // reply, ending with the real capture's own boundary shape: the prompt's
+  // last character glued directly onto agy's "▸ Thought Process" heading on
+  // the exact same row, with no separating newline. Reproduced at a smaller
+  // scale here (multi-line prompt, no mid-word soft-wrap needed to prove
+  // the row-boundary logic) — the mid-word-wrap tolerance itself is
+  // structural (stripWhitespace-based matching), not a separate code path.
+  it('consumes this turn\'s ENTIRE multi-line echoed prompt (not just its first row), including a boundary row where the prompt ends mid-row directly against "▸ Thought Process", leaving only the real reply', () => {
+    const prompt =
+      'Continue from the existing Claude and Codex FocusBoard project.\n' +
+      'Add:\n' +
+      '* A daily focus timer with Start, Pause, and Reset\n' +
+      '* Save the timer state locally\n' +
+      '--- Continuation context ---\n' +
+      'Workspace: C:\\project\n' +
+      'Prior work completed:\n' +
+      '- Bash failed (failed 5 times)'
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn(prompt)
+    const events = classifier.classify(
+      snapshot([
+        '> Continue from the existing Claude and Codex FocusBoard project.',
+        'Add:',
+        '* A daily focus timer with Start, Pause, and Reset',
+        '* Save the timer state locally',
+        '--- Continuation context ---',
+        'Workspace: C:\\project',
+        'Prior work completed:',
+        '- Bash failed (failed 5 times)▸ Thought Process',
+        'I have added the daily focus timer functionality.',
+        '',
+        '────────────────────────────',
+        '? for shortcuts                                            Gemini 3.1 Pro (High)'
+      ])
+    )
+
+    expect(events).toEqual([{ type: 'assistant_message', text: 'I have added the daily focus timer functionality.' }])
+  })
+
+  // Defense in depth alongside the fix above: a long prompt's echo could in
+  // principle still be mid-render when the FIRST idle-debounced snapshot
+  // fires (agy hasn't finished laying out that big a paste yet), in which
+  // case a single-pass consumption (everything available, then never look
+  // again) would only consume as much as had rendered by that first
+  // snapshot. Reproduced here by splitting the exact same multi-line prompt
+  // from the test above across two separate classify() calls, the first
+  // ending mid-echo and the second carrying the rest plus the real reply —
+  // consumption must pick back up on the second call, not stay stuck at
+  // wherever the first one left off.
+  it('resumes echo consumption across MULTIPLE classify() calls when the echo itself is still rendering, instead of only ever consuming what was on screen the first time the anchor was found', () => {
+    const prompt =
+      'Continue from the existing Claude and Codex FocusBoard project.\n' +
+      'Add:\n' +
+      '* A daily focus timer with Start, Pause, and Reset\n' +
+      '* Save the timer state locally\n' +
+      '--- Continuation context ---\n' +
+      'Workspace: C:\\project\n' +
+      'Prior work completed:\n' +
+      '- Bash failed (failed 5 times)'
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn(prompt)
+
+    // First snapshot: only the first half of the echo has rendered so far —
+    // a real, plausible mid-paste-render state, not a full redraw.
+    const firstEvents = classifier.classify(
+      snapshot([
+        '> Continue from the existing Claude and Codex FocusBoard project.',
+        'Add:',
+        '* A daily focus timer with Start, Pause, and Reset',
+        '* Save the timer state locally'
+      ])
+    )
+    expect(firstEvents.filter((e) => e.type === 'assistant_message')).toHaveLength(0)
+
+    // Second snapshot: the terminal only ever GROWS (a real scrollback never
+    // shrinks between snapshots outside of a full clear) — the rest of the
+    // echo has now rendered, immediately followed by the real reply.
+    const secondEvents = classifier.classify(
+      snapshot([
+        '> Continue from the existing Claude and Codex FocusBoard project.',
+        'Add:',
+        '* A daily focus timer with Start, Pause, and Reset',
+        '* Save the timer state locally',
+        '--- Continuation context ---',
+        'Workspace: C:\\project',
+        'Prior work completed:',
+        '- Bash failed (failed 5 times)',
+        'I have added the daily focus timer functionality.',
+        '',
+        '? for shortcuts                                            Gemini 3.1 Pro (High)'
+      ])
+    )
+
+    const proseEvents = [...firstEvents, ...secondEvents].filter((e) => e.type === 'assistant_message')
+    expect(proseEvents).toEqual([{ type: 'assistant_message', text: 'I have added the daily focus timer functionality.' }])
+    for (const e of proseEvents) {
+      if (e.type === 'assistant_message') {
+        expect(e.text).not.toContain('--- Continuation context ---')
+        expect(e.text).not.toContain('Prior work completed')
+        expect(e.text).not.toContain('Bash failed')
+      }
+    }
+  })
+
+  // CRITICAL (real bug fix — the actual confirmed root cause of the
+  // handoff-context-leak bug, found by re-running the scenario above through
+  // the real app end to end and capturing raw PTY snapshots): the earlier
+  // fixes above (multi-row consumption, resumption across snapshots) were
+  // both necessary but NOT sufficient — a real capture showed the ENTIRE
+  // echo present in a SINGLE snapshot, yet consumption still stopped partway
+  // through. Root cause: the delivered prompt contained a curly apostrophe
+  // (’, U+2019 — from a session title auto-derived from natural-language
+  // text, "Claude’s existing FocusBoard project"), and agy's own rendering
+  // of the pasted text DROPPED that exact character entirely when it drew
+  // the echo on screen — "Claude’s" rendered as "Claudes", with nothing (not
+  // even a blank glyph) where the apostrophe had been. Since scanForTurnEcho
+  // previously required an exact character-for-character (whitespace aside)
+  // match, that single missing character broke the match at exactly that
+  // point, and everything from there on — workspace path, prior work, files
+  // changed, all of it — leaked into the assistant's own reply. Fixed by
+  // also treating a small set of "smart typography" Unicode punctuation
+  // (curly quotes, em/en dashes, horizontal ellipsis) as flattened away on
+  // BOTH sides of every echo comparison, alongside whitespace — see
+  // DROPPABLE_PUNCTUATION's own doc comment.
+  it('never breaks echo consumption on a curly apostrophe (or other "smart typography" punctuation) that agy\'s own rendering drops entirely from the echoed text', () => {
+    const prompt =
+      'Add a settings gear icon that toggles between light and dark theme.\n\n' +
+      '--- Continuation context ---\n' +
+      'Workspace: C:\\project\n' +
+      'Continuing from a Codex conversation ("Continue from Claude’s existing FocusBoard project. Do").\n\n' +
+      'Prior work completed:\n' +
+      '- Ran a PowerShell check\n\n' +
+      'Files changed: index.html, script.js, style.css'
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn(prompt)
+
+    const events = classifier.classify(
+      snapshot([
+        '> Add a settings gear icon that toggles between light and dark theme.',
+        '',
+        '  --- Continuation context ---',
+        '  Workspace: C:\\project',
+        // Real captured shape: the apostrophe is simply gone — "Claudes",
+        // not "Claude's" or "Claude’s".
+        '  Continuing from a Codex conversation ("Continue from Claudes existing FocusBoard project. Do").',
+        '',
+        '  Prior work completed:',
+        '  - Ran a PowerShell check',
+        '',
+        '  Files changed: index.html, script.js, style.css',
+        'Generating...',
+        '',
+        'I have added the settings gear icon.',
+        '',
+        '? for shortcuts                                            Gemini 3.1 Pro (High)'
+      ])
+    )
+
+    expect(events).toEqual([{ type: 'assistant_message', text: 'I have added the settings gear icon.' }])
+  })
+
+  it('a short single-line prompt keeps working exactly as before (no regression from the multi-row consumption change)', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(snapshot(['> go', '', 'a real reply', '? for shortcuts    Gemini 3.1 Pro (High)']))
+    expect(events).toContainEqual({ type: 'assistant_message', text: 'a real reply' })
+  })
+
+  it('re-scanning the same already-classified snapshot again (e.g. at turn completion) does not restore previously-filtered chrome or duplicate the reply', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const lines = ['> go', '', 'Generating...the real reply.', '? for shortcuts    Gemini 3.1 Pro (High)']
+    const first = classifier.classify(snapshot(lines))
+    expect(first).toEqual([{ type: 'assistant_message', text: 'the real reply.' }])
+
+    const second = classifier.classify(snapshot(lines))
+    expect(second.filter((e) => e.type === 'assistant_message')).toHaveLength(0)
+  })
+
+  it('"Generating..." glued directly onto real prose on the same row (no newline) is stripped, keeping the real text', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(snapshot(['> go', '', 'Generating...I implemented the timer changes.']))
+    expect(events).toEqual([{ type: 'assistant_message', text: 'I implemented the timer changes.' }])
+  })
+
+  it('"Generating…" with the Unicode ellipsis (not just ASCII "...") glued to prose is also stripped', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(snapshot(['> go', '', 'Generating…I implemented the timer changes.']))
+    expect(events).toEqual([{ type: 'assistant_message', text: 'I implemented the timer changes.' }])
+  })
+
+  it('a standalone "Generating..." row (nothing else on it) contributes nothing at all', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(snapshot(['> go', '', 'Generating...', '', 'the real reply']))
+    expect(events).toEqual([{ type: 'assistant_message', text: 'the real reply' }])
+  })
+
+  it('does NOT strip legitimate prose that merely contains the word "generating" with no chrome ellipsis marker', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(snapshot(['> go', '', 'Generating a random UUID for each new task.']))
+    expect(events).toEqual([{ type: 'assistant_message', text: 'Generating a random UUID for each new task.' }])
+  })
+
+  it('"▸ Thought Process" (the collapsed-thought heading) glued directly onto real prose on the same row is stripped, keeping the real text', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(snapshot(['> go', '', '▸ Thought ProcessHere is the summary.']))
+    expect(events).toEqual([{ type: 'assistant_message', text: 'Here is the summary.' }])
+  })
+
+  it('a bare "Thought Process" line (no arrow, nothing else on it) is excluded entirely', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(snapshot(['> go', '', 'Thought Process', '', 'the real reply']))
+    expect(events).toEqual([{ type: 'assistant_message', text: 'the real reply' }])
+  })
+
+  it('does NOT strip legitimate prose that starts a line with "Thought Process" followed by real content', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(snapshot(['> go', '', 'Thought Process: I decided to use localStorage for persistence.']))
+    expect(events).toEqual([{ type: 'assistant_message', text: 'Thought Process: I decided to use localStorage for persistence.' }])
+  })
+
+  it('a spinner glyph glued to real content on the same row is stripped, keeping the real text', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(snapshot(['> go', '', '⠋ Building the response…']))
+    expect(events).toEqual([{ type: 'assistant_message', text: 'Building the response…' }])
+  })
+
+  it('a bare elapsed-time readout with nothing else on the row is excluded, but real prose mentioning a duration is kept', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.beginTurn('go')
+    const events = classifier.classify(
+      snapshot(['> go', '', '12s', '', 'This took about 12s to run.'])
+    )
+    expect(events).toEqual([{ type: 'assistant_message', text: 'This took about 12s to run.' }])
+  })
+})

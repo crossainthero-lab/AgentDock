@@ -1,6 +1,12 @@
 import { execFile } from 'node:child_process'
 import type { AgentDetection, AgentId } from '@shared/types'
-import { describeResolutionFailure, resolveExecutable, type ValidateCandidate, type ValidationOutcome } from './executable-resolver'
+import {
+  describeResolutionFailure,
+  knownWindowsInstallDirs,
+  resolveExecutable,
+  type ValidateCandidate,
+  type ValidationOutcome
+} from './executable-resolver'
 
 interface DetectionSpec {
   agentId: AgentId
@@ -85,7 +91,7 @@ function executableType(path: string): string {
 }
 
 async function detectOne(spec: DetectionSpec, customPath: string | null): Promise<AgentDetection> {
-  const resolution = await resolveExecutable(spec.candidates, customPath, makeValidator(spec))
+  const resolution = await resolveExecutable(spec.candidates, customPath, makeValidator(spec), knownWindowsInstallDirs())
 
   if (!resolution.resolvedPath) {
     console.error(

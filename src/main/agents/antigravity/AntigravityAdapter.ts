@@ -330,6 +330,10 @@ class AntigravityRunHandle implements AgentRunHandle {
 
     this.updateMediaAttachedCount(snapshot)
 
+    if (process.env['AGENTDOCK_DEBUG_RAW_PTY']) {
+      console.log(`[antigravity:rawsnapshot] turnId=${this.currentTurnId} lines=${JSON.stringify(snapshot.lines)}`)
+    }
+
     const classified = this.classifier.classify(snapshot)
     noteClassifiedActivity(this.busyState, classified)
     const { events: withAttention, state: conflictState } = withConflictDetection(this.conflictState, snapshot, classified)
