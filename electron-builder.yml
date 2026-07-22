@@ -40,8 +40,22 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: AgentDock
 mac:
-  target: dmg
+  target:
+    - target: dmg
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+  icon: build/icon.icns
   category: public.app-category.developer-tools
+  # Unsigned build (no Apple Developer certificate/notarization in this
+  # pass, per project scope) — Gatekeeper will show an "unidentified
+  # developer" warning on first launch. Users must right-click > Open (or
+  # System Settings > Privacy & Security > "Open Anyway") once to run it.
+  # hardenedRuntime/notarize intentionally left unset until code signing
+  # is in scope.
+  identity: null
 linux:
   target: AppImage
   category: Development

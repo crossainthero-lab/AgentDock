@@ -27,7 +27,8 @@
 // extensions before the bare name; (c) actually running each candidate
 // (a real subprocess probe) and rejecting ones that don't work, moving on
 // to the next candidate instead of trusting existsSync alone.
-import { existsSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 
 export interface CandidateSearchResult {
@@ -73,7 +74,15 @@ export interface ResolveResult {
 
 function windowsExtensions(): string[] {
   const raw = process.env.PATHEXT
-  const exts = (raw ? raw.split(delimiter) : ['.COM', '.EXE', '.BAT', '.CMD']).map((e) => e.trim()).filter(Boolean)
+  // PATHEXT is always semicolon-delimited — that's a fixed property of the
+  // Windows environment-variable format itself, not of whatever host OS
+  // this process happens to be running on. Deliberately hardcoded (never
+  // `path.delimiter`, which reflects the actual current platform): the two
+  // coincide when this really is running on win32, but relying on that
+  // coincidence would silently break PATHEXT parsing in any context where
+  // they diverge (e.g. this exact function exercised under a platform
+  // stub in a cross-platform test suite).
+  const exts = (raw ? raw.split(';') : ['.COM', '.EXE', '.BAT', '.CMD']).map((e) => e.trim()).filter(Boolean)
   // Bare/extensionless goes LAST, not first. A real Windows executable
   // always carries one of these extensions; a bare match only ever exists
   // for Unix-style shebang scripts (e.g. npm's cross-platform bin shims),
@@ -198,6 +207,89 @@ export function knownWindowsInstallDirs(): string[] {
   return dirs.filter((d): d is string => !!d)
 }
 
+/** Fixed, non-PATH-dependent directories real installers for these CLIs are
+ *  known to use on macOS — tried ONLY as a last resort, after PATH search
+ *  has already failed, exactly like knownWindowsInstallDirs above.
+ *
+ *  Both Homebrew prefixes (`/opt/homebrew` for Apple Silicon, `/usr/local`
+ *  for Intel) are always included regardless of this process's own
+ *  `process.arch` — a Homebrew install's prefix depends on which Homebrew
+ *  was actually used to install it (e.g. an Intel Homebrew running under
+ *  Rosetta on Apple Silicon hardware, or vice versa via arch-specific
+ *  terminals), not on how AgentDock itself was built, so checking only the
+ *  "expected" prefix for the current arch could miss a real install. This
+ *  stays a fixed directory list (no `brew --prefix` subprocess call, no
+ *  shell profile sourcing) so discovery is deterministic and side-effect
+ *  free, matching the Windows fallback's own design. */
+export function knownMacInstallDirs(): string[] {
+  if (process.platform !== 'darwin') return []
+  const home = homedir()
+  const npmPrefix = process.env['npm_config_prefix']
+  const dirs = [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    '/usr/bin',
+    '/bin',
+    home && join(home, '.local', 'bin'),
+    home && join(home, '.npm-global', 'bin'),
+    npmPrefix && join(npmPrefix, 'bin')
+  ]
+  return dirs.filter((d): d is string => !!d)
+}
+
+/** Dispatches to whichever known-install-location list applies to the
+ *  current platform — the single call site every caller should use instead
+ *  of picking a platform-specific function directly. Empty on any platform
+ *  without a defined fallback list (e.g. Linux, for now). */
+export function knownInstallDirs(): string[] {
+  if (process.platform === 'win32') return knownWindowsInstallDirs()
+  if (process.platform === 'darwin') return knownMacInstallDirs()
+  return []
+}
+
+/** A macOS app launched via Finder/Dock/Spotlight inherits launchd's own
+ *  minimal PATH (typically just `/usr/bin:/bin:/usr/sbin:/sbin`) — not the
+ *  richer PATH a login shell builds from `/etc/paths.d`, Homebrew's
+ *  shellenv, or the user's own shell rc file. That's the whole reason
+ *  knownMacInstallDirs exists as a last-resort fallback inside
+ *  resolveExecutable, but other code in this app spawns bare command names
+ *  directly (e.g. git-service.ts spawning `git`) and relies entirely on the
+ *  OS's own PATH search rather than going through resolveExecutable at all.
+ *  Appending the same known directories onto this process's own
+ *  `process.env.PATH` once at startup — never replacing it, never sourcing
+ *  the user's shell profile — means every child process this app spawns
+ *  for the rest of its life sees a PATH at least as complete as a
+ *  Terminal-launched instance would, without the risk or cost of actually
+ *  executing shell startup scripts. Call once, early, from the main
+ *  process entry point. */
+export function augmentPathForMacGuiLaunch(): void {
+  if (process.platform !== 'darwin') return
+  const existingLower = new Set(pathDirs().map((d) => d.toLowerCase()))
+  const additions = knownMacInstallDirs().filter((d) => !existingLower.has(d.toLowerCase()))
+  if (additions.length === 0) return
+  const current = process.env.PATH ?? ''
+  process.env.PATH = current ? `${current}${delimiter}${additions.join(delimiter)}` : additions.join(delimiter)
+}
+
+/** Whether a resolved candidate can actually be executed, permission-wise.
+ *  Windows has no notion of an execute permission bit — executability there
+ *  is determined entirely by extension (see windowsExtensions above), so
+ *  this is always true on win32. On macOS/Linux, a file can exist with the
+ *  right name and still be un-runnable (e.g. a zip download that lost its
+ *  `+x` bit) — checking this before spawning a probe subprocess turns a
+ *  generic spawn failure into a specific, actionable diagnostic. */
+function hasExecutePermission(path: string): boolean {
+  if (process.platform === 'win32') return true
+  try {
+    accessSync(path, fsConstants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function findCandidates(
   candidateNames: string[],
   customPath: string | null,
@@ -242,6 +334,10 @@ export async function resolveExecutable(
   const pathDirSet = new Set(pathDirs().map((d) => d.toLowerCase()))
 
   for (const candidate of candidates) {
+    if (!hasExecutePermission(candidate)) {
+      rejected.push({ path: candidate, reason: 'found but missing execute permission (try: chmod +x)' })
+      continue
+    }
     const outcome = await validate(candidate)
     if (outcome.ok) {
       const strategy: ResolveResult['strategy'] = customPath

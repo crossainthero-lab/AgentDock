@@ -42,6 +42,16 @@ export interface SessionEventPayload {
  * contract it depends on.
  */
 export interface AgentDockApi {
+  /** The host OS, exposed so the renderer can make small, deliberate
+   *  platform-specific UI adjustments (e.g. hiding the custom titlebar's
+   *  window-control buttons on macOS in favor of the native traffic
+   *  lights) without an IPC round trip — this is a plain, static value
+   *  bridged directly from the main process's own `process.platform`,
+   *  never something the renderer could spoof to affect anything
+   *  security-relevant. Typed as a plain string union (not `NodeJS.Platform`)
+   *  since this file is shared into the renderer's web build, which has no
+   *  `@types/node` namespace available. */
+  platform: 'darwin' | 'win32' | 'linux' | 'freebsd' | 'openbsd' | 'sunos' | 'aix' | (string & {})
   workspace: {
     open(): Promise<Workspace | null>
     list(): Promise<Workspace[]>

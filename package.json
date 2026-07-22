@@ -16,8 +16,11 @@
     "native:check": "node scripts/native-check.js",
     "test:pty": "node scripts/pty-smoke-runner.js",
     "test:e2e:antigravity": "node scripts/e2e-antigravity-smoke.cjs",
+    "postinstall": "node scripts/fix-native-permissions.js",
     "package": "npm run build && electron-builder --dir",
-    "package:win": "npm run build && electron-builder --win --x64"
+    "package:win": "npm run build && electron-builder --win --x64",
+    "package:mac": "node scripts/fix-native-permissions.js && npm run build && electron-builder --mac --x64",
+    "package:mac:arm64": "node scripts/fix-native-permissions.js && npm run build && electron-builder --mac --arm64"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.214",

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'node:os'
-import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentEvent } from '../../src/shared/events/agent-event'
 import type { AgentDetection } from '../../src/shared/types'
@@ -258,6 +258,94 @@ describe('sessionService — delivery and event sequencing', () => {
         expect(fakeHandle.send).toHaveBeenCalledTimes(1)
       } finally {
         rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  })
+
+  describe('workspace path validation (macOS portability: real filesystem shapes a project folder can take)', () => {
+    it('proceeds normally for a workspace path containing an apostrophe', async () => {
+      const dir = join(FAKE_WORKSPACE_PATH, "Pat O'Brien's Project " + Date.now())
+      mkdirSync(dir, { recursive: true })
+      try {
+        vi.mocked(workspaceRepo.get).mockReturnValueOnce({ id: 'w1', path: dir } as ReturnType<typeof workspaceRepo.get>)
+        await expect(sessionService.sendPrompt('s-apostrophe-ws', 'hello', 't1')).resolves.toBeUndefined()
+        expect(fakeHandle.send).toHaveBeenCalledTimes(1)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    it('proceeds normally when the saved workspace path is a symlink pointing at a real directory (statSync follows symlinks transparently)', async () => {
+      const realDir = join(FAKE_WORKSPACE_PATH, 'real-project-' + Date.now())
+      const linkPath = join(FAKE_WORKSPACE_PATH, 'linked-project-' + Date.now())
+      mkdirSync(realDir, { recursive: true })
+      symlinkSync(realDir, linkPath, 'dir')
+      try {
+        vi.mocked(workspaceRepo.get).mockReturnValueOnce({ id: 'w1', path: linkPath } as ReturnType<typeof workspaceRepo.get>)
+        await expect(sessionService.sendPrompt('s-symlink-ws', 'hello', 't1')).resolves.toBeUndefined()
+        expect(fakeHandle.send).toHaveBeenCalledTimes(1)
+      } finally {
+        rmSync(linkPath, { force: true })
+        rmSync(realDir, { recursive: true, force: true })
+      }
+    })
+
+    it('rejects with a clear error, never crashing, when a symlinked workspace points at a since-deleted target (a moved/renamed real-world case)', async () => {
+      const goneDir = join(FAKE_WORKSPACE_PATH, 'gone-project-' + Date.now())
+      const linkPath = join(FAKE_WORKSPACE_PATH, 'dangling-link-' + Date.now())
+      mkdirSync(goneDir, { recursive: true })
+      symlinkSync(goneDir, linkPath, 'dir')
+      rmSync(goneDir, { recursive: true, force: true })
+      try {
+        vi.mocked(workspaceRepo.get).mockReturnValueOnce({ id: 'w1', path: linkPath } as ReturnType<typeof workspaceRepo.get>)
+        await expect(sessionService.sendPrompt('s-dangling-symlink-ws', 'hello', 't1')).rejects.toThrow(/could not be found/)
+        expect(fakeHandle.send).not.toHaveBeenCalled()
+      } finally {
+        rmSync(linkPath, { force: true })
+      }
+    })
+
+    it('rejects with a clear, non-crashing error when the workspace directory is not readable/accessible (chmod 000 on its parent blocks traversal)', async () => {
+      // Root (common in CI containers) bypasses permission bits entirely,
+      // so this regression can only be verified when actually running as
+      // a non-root user — skip cleanly rather than asserting something
+      // that would never be true in that environment. Note: chmod 000 on
+      // the target directory ITSELF is not enough to make plain statSync
+      // fail — stat only requires search (x) permission on the path's
+      // PARENT directories, not the target — so the restriction has to be
+      // on an ancestor to actually block traversal, matching a real-world
+      // "parent folder permissions were tightened" scenario.
+      if (process.getuid && process.getuid() === 0) return
+
+      const restrictedParent = join(FAKE_WORKSPACE_PATH, 'restricted-parent-' + Date.now())
+      const dir = join(restrictedParent, 'project')
+      mkdirSync(dir, { recursive: true })
+      chmodSync(restrictedParent, 0o000)
+      try {
+        vi.mocked(workspaceRepo.get).mockReturnValueOnce({ id: 'w1', path: dir } as ReturnType<typeof workspaceRepo.get>)
+        await expect(sessionService.sendPrompt('s-no-access-ws', 'hello', 't1')).rejects.toThrow(/permission/)
+        expect(fakeHandle.send).not.toHaveBeenCalled()
+      } finally {
+        chmodSync(restrictedParent, 0o755)
+        rmSync(restrictedParent, { recursive: true, force: true })
+      }
+    })
+
+    // Simulates the shape of an external/network volume mount point
+    // (/Volumes/<name>/... on macOS) without requiring a real external
+    // drive to be attached in CI — proves validateWorkspacePath's plain
+    // statSync-based logic has no special-casing tied to any particular
+    // path prefix, the same guarantee the Windows non-C:-drive test above
+    // already covers for drive letters.
+    it('works correctly for a workspace path shaped like an external/network volume mount point', async () => {
+      const volumesDir = join(FAKE_WORKSPACE_PATH, 'Volumes', 'MacBackup', 'Project ' + Date.now())
+      mkdirSync(volumesDir, { recursive: true })
+      try {
+        vi.mocked(workspaceRepo.get).mockReturnValueOnce({ id: 'w1', path: volumesDir } as ReturnType<typeof workspaceRepo.get>)
+        await expect(sessionService.sendPrompt('s-volume-ws', 'hello', 't1')).resolves.toBeUndefined()
+        expect(fakeHandle.send).toHaveBeenCalledTimes(1)
+      } finally {
+        rmSync(volumesDir, { recursive: true, force: true })
       }
     })
   })

@@ -18,6 +18,13 @@
   overflow: hidden;
 }
 
+/* Leaves room for macOS's native traffic-light controls (inset via
+   trafficLightPosition in main/index.ts) so the logo/project label never
+   renders underneath them. */
+.ad-titlebar--mac .ad-titlebar__left {
+  padding-left: 70px;
+}
+
 .ad-titlebar__logo {
   font-size: 12.5px;
   font-weight: 600;

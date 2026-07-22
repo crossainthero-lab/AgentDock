@@ -35,14 +35,21 @@ function main() {
   }
   console.log(`[native-check] found pty.node at: ${path.join(ptyNodeDir, 'pty.node')}`)
 
-  const conptyDll = path.join(ptyNodeDir, 'conpty', 'conpty.dll')
-  const openConsole = path.join(ptyNodeDir, 'conpty', 'OpenConsole.exe')
-  for (const file of [conptyDll, openConsole]) {
-    if (!fs.existsSync(file)) {
-      console.error(`[native-check] FAIL: missing required ConPTY runtime file: ${file}`)
-      process.exit(1)
+  // ConPTY is a Windows-only runtime dependency of node-pty — macOS/Linux
+  // builds don't ship (or need) conpty.dll/OpenConsole.exe at all, so only
+  // require them when actually checking a Windows build.
+  if (process.platform === 'win32') {
+    const conptyDll = path.join(ptyNodeDir, 'conpty', 'conpty.dll')
+    const openConsole = path.join(ptyNodeDir, 'conpty', 'OpenConsole.exe')
+    for (const file of [conptyDll, openConsole]) {
+      if (!fs.existsSync(file)) {
+        console.error(`[native-check] FAIL: missing required ConPTY runtime file: ${file}`)
+        process.exit(1)
+      }
+      console.log(`[native-check] found: ${file}`)
     }
-    console.log(`[native-check] found: ${file}`)
+  } else {
+    console.log('[native-check] non-Windows platform — ConPTY runtime files not applicable, skipping that check')
   }
 
   let pty
@@ -54,9 +61,12 @@ function main() {
   }
   console.log('[native-check] require("node-pty") succeeded')
 
+  // useConpty is a Windows-only option (node-pty ignores it on POSIX); the
+  // shell itself is the one genuinely platform-specific bit of this probe.
+  const shell = process.platform === 'win32' ? 'cmd.exe' : process.env.SHELL || '/bin/sh'
   let proc
   try {
-    proc = pty.spawn('cmd.exe', [], { name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(), env: process.env, useConpty: true })
+    proc = pty.spawn(shell, [], { name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(), env: process.env, useConpty: true })
   } catch (err) {
     console.error('[native-check] FAIL: pty.spawn() threw:', err)
     process.exit(1)

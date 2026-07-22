@@ -269,7 +269,7 @@ export interface TerminalExitInfo {
 
 export interface LaunchTerminalResult {
   launched: boolean
-  method: 'wt' | 'cmd' | null
+  method: 'wt' | 'cmd' | 'terminal-app' | null
   /** The reconstructed command line, shown to the user for transparency —
    *  this is always a NEW interactive session, never a reattachment to the
    *  session's live process. */

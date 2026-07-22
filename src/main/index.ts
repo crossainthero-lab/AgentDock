@@ -7,9 +7,16 @@ import { childProcessService } from './services/child-process-service'
 import { loadWindowState, saveWindowState } from './window-state'
 import { registerAllIpc } from './ipc'
 import { detectionService } from './services/detection-service'
+import { augmentPathForMacGuiLaunch } from './services/executable-resolver'
 import { codexModelCatalogService } from './services/codex-model-catalog-service'
 import { claudeModelCatalogService } from './services/claude-model-catalog-service'
 import { workspaceService } from './services/workspace-service'
+
+// Must run before anything else spawns a child process (detection, git,
+// model-catalog probes all follow) — see the function's own doc comment
+// for why a Finder/Dock-launched mac app needs this and a Terminal-launched
+// one doesn't.
+augmentPathForMacGuiLaunch()
 
 // Test-only isolation hook: redirects the sqlite DB (and, since Electron
 // scopes its single-instance lock file to userData too, the instance lock
@@ -38,6 +45,7 @@ function initialBackgroundColor(): string {
 
 function createWindow(): void {
   const state = loadWindowState()
+  const isMac = process.platform === 'darwin'
 
   mainWindow = new BrowserWindow({
     x: state.x,
@@ -47,9 +55,16 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     show: false,
-    frame: false,
+    // frame:false (used on Windows/Linux) suppresses macOS's native
+    // traffic-light controls entirely — there's no way to get them back
+    // once the frame itself is gone. On mac, keep the real frame (the
+    // default) and only hide its title bar via titleBarStyle so the
+    // traffic lights still render, inset to align with this app's own
+    // custom titlebar height; TitleBar.tsx hides its Windows-style
+    // custom min/max/close buttons on darwin to avoid a duplicate set.
+    frame: isMac,
+    ...(isMac ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 12, y: 13 } } : { titleBarStyle: 'hidden' as const }),
     backgroundColor: initialBackgroundColor(),
-    titleBarStyle: 'hidden',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

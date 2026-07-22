@@ -1,5 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { readFile } from 'node:fs/promises'
+
+/** These tests exercise one specific platform's branch of
+ *  external-terminal-service.ts at a time (Windows Terminal/cmd.exe, or
+ *  macOS Terminal.app) — the module itself branches on `process.platform`,
+ *  so a test suite that always runs on whatever OS happens to host CI/dev
+ *  needs to pin the platform it's testing, restoring the real one
+ *  afterward, rather than assuming the host OS matches the branch under
+ *  test. */
+function stubPlatform(value: NodeJS.Platform): void {
+  Object.defineProperty(process, 'platform', { value, configurable: true })
+}
+const realPlatform = process.platform
 
 interface SpawnCall {
   command: string
@@ -50,6 +63,11 @@ describe('launchExternalTerminal', () => {
   beforeEach(() => {
     spawnCalls.length = 0
     failingCommands.clear()
+    stubPlatform('win32')
+  })
+
+  afterEach(() => {
+    stubPlatform(realPlatform)
   })
 
   it('tries wt.exe first, with -d <workspacePath> and the interactive claude invocation', async () => {
@@ -133,5 +151,115 @@ describe('launchExternalTerminal', () => {
       await launchExternalTerminal({ ...codexParams, permissionMode: 'default' })
       expect(spawnCalls[0].args.join(' ')).not.toContain('--sandbox')
     })
+  })
+})
+
+describe('launchExternalTerminal — macOS', () => {
+  const macParams = {
+    agentId: 'claude-code' as const,
+    executablePath: '/opt/homebrew/bin/claude',
+    workspacePath: "/Users/pat o'brien/My Projects/café ☕",
+    permissionMode: 'default',
+    nativeSessionId: null as string | null
+  }
+
+  beforeEach(() => {
+    spawnCalls.length = 0
+    failingCommands.clear()
+    stubPlatform('darwin')
+  })
+
+  afterEach(() => {
+    stubPlatform(realPlatform)
+  })
+
+  it('opens Terminal.app via osascript, activating it, rather than any Windows-only binary', async () => {
+    const result = await launchExternalTerminal(macParams)
+
+    expect(spawnCalls).toHaveLength(1)
+    expect(spawnCalls[0].command).toBe('osascript')
+    expect(spawnCalls[0].args[0]).toBe('-e')
+    const appleScript = spawnCalls[0].args[1]
+    expect(appleScript).toContain('tell application "Terminal" to do script')
+    expect(appleScript).toContain('tell application "Terminal" to activate')
+    expect(result).toEqual({ launched: true, method: 'terminal-app', command: macParams.executablePath })
+  })
+
+  it('CRITICAL (real bug fix): the script deletes itself as its own first statement — never on an external fixed timer — so a slow-to-open Terminal.app can never hit "No such file or directory" (confirmed live: a naive 10s-timeout cleanup raced Terminal.app actually reading the file and lost)', async () => {
+    await launchExternalTerminal(macParams)
+
+    const appleScript = spawnCalls[0].args[1]
+    const scriptPathMatch = /do script "([^"]+)"/.exec(appleScript)
+    const scriptPath = scriptPathMatch![1]
+    const content = await readFile(scriptPath, 'utf-8')
+    const lines = content.trim().split('\n')
+
+    expect(lines[0]).toBe('#!/bin/sh')
+    expect(lines[1]).toBe(`rm -f '${scriptPath}'`)
+    // The rm line must come before cd/exec — it has to run (and thus only
+    // ever fire once the shell has actually started) before anything else,
+    // never queued to run "later" from outside the script's own execution.
+    const cdIndex = lines.findIndex((l) => l.startsWith('cd '))
+    expect(cdIndex).toBeGreaterThan(1)
+  })
+
+  it('writes a generated shell script whose cd/exec lines correctly single-quote a workspace path containing spaces, an apostrophe, and Unicode', async () => {
+    await launchExternalTerminal(macParams)
+
+    const appleScript = spawnCalls[0].args[1]
+    const scriptPathMatch = /do script "([^"]+)"/.exec(appleScript)
+    expect(scriptPathMatch).not.toBeNull()
+    const scriptPath = scriptPathMatch![1]
+
+    const content = await readFile(scriptPath, 'utf-8')
+    expect(content).toContain('#!/bin/sh')
+    // Real POSIX single-quote escaping: an embedded apostrophe becomes
+    // '\'' — never a bare unescaped quote that would break the command.
+    expect(content).toContain("cd '/Users/pat o'\\''brien/My Projects/café ☕'")
+    expect(content).toContain("exec '/opt/homebrew/bin/claude'")
+  })
+
+  it('includes --resume for Claude and maps Codex sandbox permission modes the same as on Windows', async () => {
+    await launchExternalTerminal({ ...macParams, nativeSessionId: 'real-session-uuid' })
+    const scriptPathMatch = /do script "([^"]+)"/.exec(spawnCalls[0].args[1])
+    const content = await readFile(scriptPathMatch![1], 'utf-8')
+    expect(content).toContain('--resume')
+    expect(content).toContain('real-session-uuid')
+  })
+
+  it('surfaces a real, non-empty error when osascript itself is unavailable — never a silent no-op', async () => {
+    failingCommands.add('osascript')
+    const result = await launchExternalTerminal(macParams)
+
+    expect(result.launched).toBe(false)
+    expect(result.method).toBeNull()
+    expect(result.error).toBeTruthy()
+  })
+})
+
+describe('launchExternalTerminal — unsupported platform', () => {
+  beforeEach(() => {
+    spawnCalls.length = 0
+    failingCommands.clear()
+    stubPlatform('linux')
+  })
+
+  afterEach(() => {
+    stubPlatform(realPlatform)
+  })
+
+  it('reports a clear not-supported error instead of guessing at a terminal emulator', async () => {
+    const result = await launchExternalTerminal({
+      agentId: 'claude-code',
+      executablePath: '/usr/bin/claude',
+      workspacePath: '/home/pat/project',
+      permissionMode: 'default',
+      nativeSessionId: null
+    })
+
+    expect(spawnCalls).toHaveLength(0)
+    expect(result.launched).toBe(false)
+    expect(result.method).toBeNull()
+    expect(result.error).toBeTruthy()
   })
 })
