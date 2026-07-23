@@ -6,6 +6,8 @@
 // pty-service.ts, which stays the primitive for Antigravity's genuinely
 // interactive PTY session.
 import { spawn, type ChildProcess } from 'node:child_process'
+import { isWindowsShim, resolveShimTarget } from './windows-shim-resolver'
+import { validateSpawnPlan } from './spawn-guard'
 
 export interface ChildSpawnOptions {
   cwd: string
@@ -39,9 +41,25 @@ class ManagedChild implements ManagedChildProcess {
   private running = true
 
   constructor(command: string, args: string[], options: ChildSpawnOptions) {
-    console.log(`[child-process] spawning "${command}" args=${JSON.stringify(args)} cwd="${options.cwd}"`)
+    // Same Windows .cmd/.bat resolution pty-service.ts applies — plain
+    // spawn() with shell:false (below) cannot launch a shim directly on
+    // Windows, and this is currently unused but shouldn't become a latent
+    // trap for whatever calls it next. See windows-shim-resolver.ts.
+    let resolvedCommand = command
+    let resolvedArgs = args
+    if (isWindowsShim(command)) {
+      const target = resolveShimTarget(command)
+      if (!target) {
+        throw new Error(`"${command}" is a Windows .cmd/.bat shim AgentDock could not resolve to a real executable.`)
+      }
+      resolvedCommand = target.command
+      resolvedArgs = [...target.args, ...args]
+    }
+    validateSpawnPlan({ command: resolvedCommand, args: resolvedArgs, cwd: options.cwd, env: options.env })
 
-    this.proc = spawn(command, args, {
+    console.log(`[child-process] spawning "${resolvedCommand}" args=${JSON.stringify(resolvedArgs)} cwd="${options.cwd}"`)
+
+    this.proc = spawn(resolvedCommand, resolvedArgs, {
       cwd: options.cwd,
       env: options.env ?? process.env,
       windowsHide: true,

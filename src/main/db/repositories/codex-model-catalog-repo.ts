@@ -26,5 +26,15 @@ export const codexModelCatalogRepo = {
       { key: CATALOG_KEY, valueJson: JSON.stringify(catalog) }
     )
     persist()
+  },
+
+  /** Used by the Settings "reset stale configuration" action — a cached
+   *  catalogue fetched on a different machine is meaningless (Codex model
+   *  availability is account-scoped, not machine-scoped, but a stale entry
+   *  with no corresponding live CLI install nearby is still just dead
+   *  weight worth clearing alongside executable overrides). */
+  clear(): void {
+    run(getDatabase(), 'DELETE FROM settings WHERE key = @key', { key: CATALOG_KEY })
+    persist()
   }
 }

@@ -1,8 +1,8 @@
 import type React from 'react'
-import { FolderOpen } from 'lucide-react'
 import { useAppState } from '../../state/AppStateContext'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
+import appIcon from '../../assets/icon.png'
 import './EmptyWorkspace.css'
 
 export function EmptyWorkspace(): React.JSX.Element {
@@ -11,7 +11,7 @@ export function EmptyWorkspace(): React.JSX.Element {
   return (
     <div className="ad-empty-workspace">
       <EmptyState
-        icon={<FolderOpen size={32} strokeWidth={1.5} />}
+        icon={<img src={appIcon} alt="" width={48} height={48} style={{ borderRadius: 10 }} />}
         title="AgentDock"
         description="Open a project to start using Claude Code, Codex, or Antigravity on it."
         action={

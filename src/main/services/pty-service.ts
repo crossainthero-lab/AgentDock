@@ -4,6 +4,10 @@
 // ANSI output, cursor control, real resize, and a deliverable Ctrl+C all
 // work exactly as they would in a real terminal window.
 import * as pty from 'node-pty'
+import { basename } from 'node:path'
+import { isWindowsShim, resolveShimTarget } from './windows-shim-resolver'
+import { validateSpawnPlan } from './spawn-guard'
+import { buildSpawnDiagnostics, formatSpawnDiagnostics } from './spawn-diagnostics'
 
 export interface SpawnOptions {
   cwd: string
@@ -40,16 +44,55 @@ class PtyProcess implements ManagedProcess {
   private running = true
 
   constructor(file: string, args: string[], options: SpawnOptions) {
-    console.log(`[pty] spawning "${file}" args=${JSON.stringify(args)} cwd="${options.cwd}"`)
+    // node-pty's own pty.spawn() on Windows ultimately goes through
+    // CreateProcess (via ConPTY) just like a plain child_process.spawn —
+    // it has no more ability to launch a `.cmd`/`.bat` shim directly than
+    // raw spawn does, and no built-in shim-resolution of its own. Resolving
+    // to the shim's real target here (rather than at each individual
+    // caller — Antigravity's session, the Terminal drawer, any future PTY
+    // consumer) means every PTY launch in AgentDock gets this fix for
+    // free. See windows-shim-resolver.ts's module comment for the full
+    // root-cause explanation.
+    let resolvedFile = file
+    let resolvedArgs = args
+    const agentLabel = basename(file)
 
-    this.proc = pty.spawn(file, args, {
-      name: 'xterm-256color',
-      cols: options.cols ?? 120,
-      rows: options.rows ?? 30,
-      cwd: options.cwd,
-      env: options.env ?? process.env,
-      useConpty: true
-    })
+    try {
+      if (isWindowsShim(file)) {
+        const target = resolveShimTarget(file)
+        if (!target) {
+          throw new Error(
+            `"${file}" is a Windows .cmd/.bat shim AgentDock could not resolve to a real executable. ` +
+              'Set a direct path to the underlying .exe as a custom path in Settings, or reinstall this CLI using its native Windows installer instead of npm.'
+          )
+        }
+        resolvedFile = target.command
+        resolvedArgs = [...target.args, ...args]
+      }
+
+      validateSpawnPlan({ command: resolvedFile, args: resolvedArgs, cwd: options.cwd, env: options.env })
+      console.log(`[pty] spawning "${resolvedFile}" args=${JSON.stringify(resolvedArgs)} cwd="${options.cwd}"`)
+
+      this.proc = pty.spawn(resolvedFile, resolvedArgs, {
+        name: 'xterm-256color',
+        cols: options.cols ?? 120,
+        rows: options.rows ?? 30,
+        cwd: options.cwd,
+        env: options.env ?? process.env,
+        useConpty: true
+      })
+    } catch (error) {
+      const diagnostics = buildSpawnDiagnostics({
+        agentId: agentLabel,
+        mechanism: 'pty',
+        executablePath: resolvedFile,
+        args: resolvedArgs,
+        cwd: options.cwd,
+        error
+      })
+      console.error('[pty] spawn failed:', formatSpawnDiagnostics(diagnostics))
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n\n${formatSpawnDiagnostics(diagnostics)}`)
+    }
     this.pid = this.proc.pid
     console.log(`[pty] spawned pid=${this.pid}`)
 

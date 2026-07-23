@@ -13,8 +13,11 @@ import type {
   Diagnostics,
   DiffResult,
   ExecutableTestResult,
+  FileListResult,
+  FilePreview,
   HandoffExecuteInput,
   HandoffExecuteResult,
+  ImportFileResult,
   LaunchTerminalResult,
   Session,
   SessionWithMessages,
@@ -64,6 +67,15 @@ export interface AgentDockApi {
      *  any live agent processes first. Irreversible. */
     delete(id: string): Promise<void>
     setCollapsed(id: string, collapsed: boolean): Promise<void>
+    /** Read-only — projects whose folder no longer exists on this
+     *  machine. Never called automatically; backs the Settings "reset
+     *  stale configuration" action's preview. */
+    findMissing(): Promise<Workspace[]>
+    /** Removes exactly the projects findMissing() would report — an
+     *  explicit user action, never automatic. Only clears AgentDock's own
+     *  bookkeeping row (plus that project's sessions/messages); never
+     *  touches anything on disk. */
+    removeMissing(): Promise<Workspace[]>
   }
   agents: {
     list(): Promise<AgentDetection[]>
@@ -218,6 +230,11 @@ export interface AgentDockApi {
     get(): Promise<Settings>
     update(patch: SettingsPatch): Promise<Settings>
     getDiagnostics(): Promise<Diagnostics>
+    /** Clears every agent's custom executable path override (forcing fresh
+     *  auto-detection on this machine next time) and the cached Codex
+     *  model catalogue. Never touches model/permission-mode/reasoning-
+     *  effort preferences, projects, or conversations. */
+    resetAgentDetection(): Promise<Settings>
   }
   terminal: {
     write(sessionId: string, data: string): void
@@ -240,6 +257,48 @@ export interface AgentDockApi {
     close(): void
     isMaximized(): Promise<boolean>
     onMaximizeChange(cb: (isMaximized: boolean) => void): Unsubscribe
+  }
+  /** Backs the file-explorer side panel — lazy one-directory-at-a-time
+   *  listing, text/image preview, and importing external files into the
+   *  workspace. Every method is workspace-scoped and path-validated
+   *  main-process-side (see filesystem-service.ts); the renderer never gets
+   *  unrestricted filesystem access. */
+  filesystem: {
+    /** Lists the immediate children of `relPath` (posix-style, relative to
+     *  the workspace root; '' for the root itself) — never recurses. */
+    list(workspaceId: string, relPath: string): Promise<FileListResult>
+    /** Reads one file for preview — text (utf8, size-capped), image (data
+     *  URL), or an "unsupported"/"error" result; never a raw buffer. */
+    read(workspaceId: string, relPath: string): Promise<FilePreview>
+    /** Returns which of `fileNames` already exist in `destRelPath`, so the
+     *  renderer can prompt rename/replace/cancel before importing. */
+    checkImportConflicts(workspaceId: string, destRelPath: string, fileNames: string[]): Promise<string[]>
+    /** Opens a native multi-select picker for any normal file type.
+     *  Returns real source paths, not yet copied anywhere. */
+    browseImportFiles(): Promise<string[]>
+    /** Copies each source file into `destRelPath` under its resolved
+     *  `targetName` (already conflict-resolved by the caller). */
+    importFiles(workspaceId: string, destRelPath: string, files: { sourcePath: string; targetName: string }[]): Promise<ImportFileResult[]>
+    /** Copies one already-on-disk file into `destRelPath`, auto-uniquifying
+     *  its name on collision — no rename/replace/skip prompt, used by the
+     *  chat composer's quick-attach flow (see PromptComposer.tsx). */
+    importFileAutoRename(workspaceId: string, destRelPath: string, sourcePath: string): Promise<ImportFileResult>
+    /** Same as importFileAutoRename, but for a pasted/dropped file with no
+     *  reliable filesystem path — writes the decoded data URL bytes
+     *  directly. */
+    importFromDataUrl(workspaceId: string, destRelPath: string, fileName: string, dataUrl: string): Promise<ImportFileResult>
+    /** Starts (ref-counted) watching one directory for changes — call only
+     *  for a directory currently expanded in the tree, and unwatch() when
+     *  it's collapsed. */
+    watch(workspaceId: string, relPath: string): Promise<{ ok: boolean; error?: string }>
+    unwatch(workspaceId: string, relPath: string): Promise<void>
+    /** Fires (debounced) whenever a watched directory changes. */
+    onChanged(cb: (payload: { workspaceId: string; relPath: string }) => void): Unsubscribe
+    /** Shows the native right-click context menu for one tree entry (Open
+     *  in VS Code, reveal in the OS file manager, copy relative/full path)
+     *  — every action is resolved and validated main-process-side against
+     *  the workspace root, same as every other filesystem method here. */
+    showContextMenu(workspaceId: string, relPath: string, isDirectory: boolean): Promise<void>
   }
 }
 

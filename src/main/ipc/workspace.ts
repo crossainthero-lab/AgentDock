@@ -12,4 +12,6 @@ export function registerWorkspaceIpc(window: BrowserWindow): void {
   ipcMain.handle(IpcChannels.workspaceSetCollapsed, (_event, id: string, collapsed: boolean) =>
     workspaceService.setCollapsed(id, collapsed)
   )
+  ipcMain.handle(IpcChannels.workspaceFindMissing, () => workspaceService.findMissingWorkspaces())
+  ipcMain.handle(IpcChannels.workspaceRemoveMissing, () => workspaceService.removeMissingWorkspaces())
 }

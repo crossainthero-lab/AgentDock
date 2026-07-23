@@ -12,6 +12,7 @@ import { registerMediaIpc } from './media'
 import { registerCodexIpc } from './codex'
 import { registerClaudeIpc } from './claude'
 import { registerAntigravityIpc } from './antigravity'
+import { registerFilesystemIpc } from './filesystem'
 
 export function registerAllIpc(window: BrowserWindow): void {
   registerWorkspaceIpc(window)
@@ -27,4 +28,5 @@ export function registerAllIpc(window: BrowserWindow): void {
   registerCodexIpc(window)
   registerClaudeIpc()
   registerAntigravityIpc(window)
+  registerFilesystemIpc(window)
 }

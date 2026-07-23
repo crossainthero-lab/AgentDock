@@ -1,5 +1,6 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { initDatabase, closeDatabase } from './db/database'
 import { settingsService } from './services/settings-service'
 import { ptyService } from './services/pty-service'
@@ -43,6 +44,13 @@ function initialBackgroundColor(): string {
   return dark ? '#17181c' : '#f5f6f8'
 }
 
+// electron-builder bakes build/icon.ico|icns into the packaged executable, so
+// packaged builds already show the right icon without this. build/ itself
+// isn't shipped in the packaged app (see electron-builder.yml's `files`), so
+// this path only resolves in dev — it exists purely to fix the dev-mode
+// window/taskbar icon, which would otherwise show Electron's default icon.
+const devIconPath = join(__dirname, '../../build/icon.png')
+
 function createWindow(): void {
   const state = loadWindowState()
   const isMac = process.platform === 'darwin'
@@ -55,6 +63,7 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     show: false,
+    ...(existsSync(devIconPath) ? { icon: devIconPath } : {}),
     // frame:false (used on Windows/Linux) suppresses macOS's native
     // traffic-light controls entirely — there's no way to get them back
     // once the frame itself is gone. On mac, keep the real frame (the

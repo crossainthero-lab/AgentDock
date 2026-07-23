@@ -20,6 +20,8 @@
 // fix: only types are imported statically (erased at compile time), the
 // runtime module is loaded via a cached dynamic `import()`.
 import type { Codex as CodexClass, Input, SandboxMode, Thread, ThreadEvent, ThreadOptions, UserInput } from '@openai/codex-sdk'
+import { isWindowsShim, resolveShimTarget } from '../../services/windows-shim-resolver'
+import { buildSpawnDiagnostics, formatSpawnDiagnostics } from '../../services/spawn-diagnostics'
 
 type CodexSdkModule = typeof import('@openai/codex-sdk')
 
@@ -27,6 +29,42 @@ let sdkModulePromise: Promise<CodexSdkModule> | null = null
 function loadSdk(): Promise<CodexSdkModule> {
   if (!sdkModulePromise) sdkModulePromise = import('@openai/codex-sdk')
   return sdkModulePromise
+}
+
+// @openai/codex-sdk calls raw `child_process.spawn(this.executablePath,
+// commandArgs, {...})` internally (confirmed by reading its compiled
+// source) with no shell option and no Windows `.cmd`/`.bat` awareness —
+// unlike @anthropic-ai/claude-agent-sdk, it exposes no override hook to
+// substitute a safer spawn mechanism. A `.cmd`/`.bat`-resolved Codex
+// install (the normal shape produced by e.g. `npm install -g`, as opposed
+// to a native .exe from Codex's own Windows installer) handed to it as
+// `codexPathOverride` fails with `spawn <path> EINVAL` the moment a
+// session actually starts. Since `codexPathOverride` only accepts a single
+// path (no separate args array we control), the fix has to happen before
+// the SDK is ever constructed: resolve the shim to the real target it
+// ultimately runs and use THAT as the override instead. If the shim can't
+// be resolved to a single directly-executable target (e.g. it turns out to
+// require a `node <script>.js` invocation, which doesn't fit
+// `codexPathOverride`'s single-path contract), this fails loudly with a
+// clear, actionable error rather than silently handing the SDK something
+// already known not to work.
+function resolveCodexExecutablePath(executablePath: string): string {
+  if (!isWindowsShim(executablePath)) return executablePath
+  const target = resolveShimTarget(executablePath)
+  if (target && target.args.length === 0) return target.command
+
+  const error = new Error(
+    `Codex resolved to a Windows shim (${executablePath}) that AgentDock cannot launch directly — the Codex SDK has no way to run it through cmd.exe. ` +
+      'Locate the real codex.exe (commonly under %LOCALAPPDATA%\\Programs\\OpenAI\\Codex\\bin) and set it as a custom path in Settings → Agents, or reinstall Codex using its native Windows installer instead of npm.'
+  )
+  const diagnostics = buildSpawnDiagnostics({
+    agentId: 'codex',
+    mechanism: 'sdk-spawn (codexPathOverride)',
+    executablePath,
+    error
+  })
+  console.error('[codex-sdk] shim resolution failed:', formatSpawnDiagnostics(diagnostics))
+  throw new Error(`${error.message}\n\n${formatSpawnDiagnostics(diagnostics)}`)
 }
 
 export interface CodexAgentSdkTransportOptions {
@@ -150,7 +188,7 @@ export class CodexAgentSdkTransport {
     try {
       const { Codex } = await loadSdk()
       if (!this.codex) {
-        this.codex = new Codex({ codexPathOverride: this.opts.executablePath })
+        this.codex = new Codex({ codexPathOverride: resolveCodexExecutablePath(this.opts.executablePath) })
       }
       if (!this.thread) {
         const threadOptions: ThreadOptions = {

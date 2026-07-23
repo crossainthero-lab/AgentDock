@@ -7,4 +7,5 @@ export function registerSettingsIpc(): void {
   ipcMain.handle(IpcChannels.settingsGet, () => settingsService.get())
   ipcMain.handle(IpcChannels.settingsUpdate, (_event, patch: SettingsPatch) => settingsService.update(patch))
   ipcMain.handle(IpcChannels.settingsDiagnostics, () => settingsService.getDiagnostics())
+  ipcMain.handle(IpcChannels.settingsResetAgentDetection, () => settingsService.resetAgentDetection())
 }

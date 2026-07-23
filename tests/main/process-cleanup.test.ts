@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { tmpdir } from 'node:os'
+
+// A real, always-existing directory — spawn-guard.ts's validateSpawnPlan()
+// now requires `cwd` to actually exist on disk before ever reaching
+// pty.spawn()/child_process.spawn(), so these tests (which fake the actual
+// spawn call but not that validation, which runs first) need a real path
+// here, never a made-up one like '/tmp/project' that doesn't exist on
+// Windows.
+const REAL_CWD = tmpdir()
 
 // Neither pty-service.ts nor child-process-service.ts had any test
 // coverage before this pass — both are exactly what src/main/index.ts's
@@ -42,8 +51,8 @@ describe('pty-service — killAll (process shutdown cleanup)', () => {
 
   it('killAll() kills every live PTY process, e.g. an Antigravity session that never sent its own exit', async () => {
     const { ptyService } = await import('../../src/main/services/pty-service')
-    ptyService.spawn('agy', [], { cwd: '/tmp/project' })
-    ptyService.spawn('agy', ['resume', 'abc'], { cwd: '/tmp/project' })
+    ptyService.spawn('agy', [], { cwd: REAL_CWD })
+    ptyService.spawn('agy', ['resume', 'abc'], { cwd: REAL_CWD })
 
     expect(spawnedPtys).toHaveLength(2)
     ptyService.killAll()
@@ -55,8 +64,8 @@ describe('pty-service — killAll (process shutdown cleanup)', () => {
 
   it('does not throw if one process throws on kill() — every process still gets a kill attempt (best-effort shutdown)', async () => {
     const { ptyService } = await import('../../src/main/services/pty-service')
-    ptyService.spawn('agy', [], { cwd: '/tmp/project' })
-    ptyService.spawn('agy', [], { cwd: '/tmp/project' })
+    ptyService.spawn('agy', [], { cwd: REAL_CWD })
+    ptyService.spawn('agy', [], { cwd: REAL_CWD })
     spawnedPtys[0].kill.mockImplementation(() => {
       throw new Error('ESRCH: no such process')
     })
@@ -68,7 +77,7 @@ describe('pty-service — killAll (process shutdown cleanup)', () => {
 
   it('a process that already exited before killAll() runs is not killed again (already removed from the live set)', async () => {
     const { ptyService } = await import('../../src/main/services/pty-service')
-    ptyService.spawn('agy', [], { cwd: '/tmp/project' })
+    ptyService.spawn('agy', [], { cwd: REAL_CWD })
     const proc = spawnedPtys[0]
     proc.emit('exit', { exitCode: 0, signal: undefined })
 
@@ -78,7 +87,7 @@ describe('pty-service — killAll (process shutdown cleanup)', () => {
 
   it('calling killAll() twice in a row (e.g. window-all-closed then before-quit) is safe and does not double-kill', async () => {
     const { ptyService } = await import('../../src/main/services/pty-service')
-    ptyService.spawn('agy', [], { cwd: '/tmp/project' })
+    ptyService.spawn('agy', [], { cwd: REAL_CWD })
     ptyService.killAll()
     ptyService.killAll()
 
@@ -115,8 +124,8 @@ describe('child-process-service — killAll (process shutdown cleanup)', () => {
 
   it('killAll() kills every live structured-transport process, e.g. a Claude/Codex turn still in flight', async () => {
     const { childProcessService } = await import('../../src/main/services/child-process-service')
-    childProcessService.spawn('claude', ['-p'], { cwd: '/tmp/project' })
-    childProcessService.spawn('codex', ['exec'], { cwd: '/tmp/project' })
+    childProcessService.spawn('claude', ['-p'], { cwd: REAL_CWD })
+    childProcessService.spawn('codex', ['exec'], { cwd: REAL_CWD })
 
     expect(spawnedChildren).toHaveLength(2)
     childProcessService.killAll()
@@ -128,8 +137,8 @@ describe('child-process-service — killAll (process shutdown cleanup)', () => {
 
   it('does not throw if one process throws on kill() — every process still gets a kill attempt', async () => {
     const { childProcessService } = await import('../../src/main/services/child-process-service')
-    childProcessService.spawn('claude', ['-p'], { cwd: '/tmp/project' })
-    childProcessService.spawn('codex', ['exec'], { cwd: '/tmp/project' })
+    childProcessService.spawn('claude', ['-p'], { cwd: REAL_CWD })
+    childProcessService.spawn('codex', ['exec'], { cwd: REAL_CWD })
     spawnedChildren[0].kill.mockImplementation(() => {
       throw new Error('ESRCH: no such process')
     })
@@ -141,7 +150,7 @@ describe('child-process-service — killAll (process shutdown cleanup)', () => {
 
   it('a process that already exited before killAll() runs is not killed again', async () => {
     const { childProcessService } = await import('../../src/main/services/child-process-service')
-    childProcessService.spawn('claude', ['-p'], { cwd: '/tmp/project' })
+    childProcessService.spawn('claude', ['-p'], { cwd: REAL_CWD })
     const proc = spawnedChildren[0]
     proc.emit('exit', 0, null)
 

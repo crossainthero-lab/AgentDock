@@ -48,8 +48,13 @@ export function MessageBubble({
   if (role === 'error') {
     return (
       <div className="ad-message ad-message--error">
-        <AlertTriangle size={14} />
-        <div className="ad-message__text">{text}</div>
+        <div className="ad-message--error__row">
+          <AlertTriangle size={14} />
+          <div className="ad-message__text">{text}</div>
+        </div>
+        <div className="ad-message__toolbar ad-message__toolbar--error">
+          <CopyButton text={text} label="Copy diagnostics" />
+        </div>
       </div>
     )
   }

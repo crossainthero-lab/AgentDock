@@ -6,6 +6,7 @@ directories:
 files:
   - out/**/*
   - package.json
+afterPack: scripts/after-pack-set-icon.js
 asarUnpack:
   - '**/*.node'
   - 'node_modules/node-pty/build/Release/**'
@@ -58,5 +59,6 @@ mac:
   identity: null
 linux:
   target: AppImage
+  icon: build/icon.png
   category: Development
 npmRebuild: false

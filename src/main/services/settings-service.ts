@@ -1,5 +1,6 @@
 import { app } from 'electron'
 import { settingsRepo } from '../db/repositories/settings-repo'
+import { codexModelCatalogRepo } from '../db/repositories/codex-model-catalog-repo'
 import type { AgentId, Diagnostics, Settings, SettingsPatch } from '@shared/types'
 import { AGENT_IDS } from '@shared/types'
 import { getDatabasePath } from '../db/database'
@@ -51,6 +52,26 @@ export const settingsService = {
     if (!settingsRepo.get()) {
       settingsRepo.set(defaultSettings())
     }
+  },
+
+  /** Settings → "Reset agent detection" action — clears exactly what can
+   *  plausibly go stale or wrong after moving AgentDock's settings to a
+   *  different machine (a custom executable path pointing at a file that
+   *  only existed on the old one; a Codex model-catalogue cache fetched
+   *  there) without touching anything a user would consider "their data"
+   *  (model/permission-mode/reasoning-effort preferences, projects,
+   *  conversations). The next detect() call re-runs full auto-detection on
+   *  THIS machine from scratch. */
+  resetAgentDetection(): Settings {
+    const current = this.get()
+    const clearedAgents = {} as Settings['agents']
+    for (const id of AGENT_IDS) {
+      clearedAgents[id] = { ...current.agents[id], customPath: null }
+    }
+    const reset: Settings = { ...current, agents: clearedAgents }
+    settingsRepo.set(reset)
+    codexModelCatalogRepo.clear()
+    return reset
   },
 
   getDiagnostics(): Diagnostics {
