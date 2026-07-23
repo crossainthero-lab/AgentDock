@@ -10,14 +10,13 @@ Everything runs locally: AgentDock spawns the CLI processes on your machine, sto
 
 ## Preview
 
-<!-- Replace with a real screenshot, e.g. docs/screenshot.png -->
-![AgentDock screenshot placeholder](docs/screenshot.png)
+![AgentDock screenshot](docs/agentdock-preview.png)
 
 ## Features
 
 - **Unified chat UI** for Claude Code, Codex, and Antigravity, with a consistent conversation view regardless of which CLI is behind it.
 - **Multi-project workspace management** — add multiple project folders, each with its own sessions.
-- **Multiple concurrent sessions per project**, with sidebar session switching and auto-generated titles.
+- **Multiple sessions per project**, with sidebar switching and auto-generated titles.
 - **Rich Markdown rendering** of agent responses (GFM, syntax-highlighted code blocks, tables, sanitized HTML).
 - **Structured activity view** — tool calls, file edits, and approval requests are shown as readable cards instead of raw log output.
 - **Approval dialog** for agent permission requests, with per-agent permission modes (e.g. Claude's `acceptEdits`/`plan`/`bypassPermissions`, Codex's sandbox modes, Antigravity's `--mode` flags).
@@ -45,8 +44,9 @@ AgentDock detects each CLI on your `PATH` (plus a few known install locations) a
 | Platform | Status | Details |
 |---|---|---|
 | Windows (x64) | **Confirmed** | NSIS installer and portable build; packaged-app smoke test in `scripts/e2e-packaged-smoke-test.cjs`. Executable resolution handles PATH, PATHEXT, and known install directories. |
-| macOS (Intel & Apple Silicon) | **Confirmed** | DMG and zip builds for both `x64` and `arm64`; packaged-app smoke test in `scripts/e2e-packaged-smoke-test-mac.cjs`. Builds are unsigned — see [Troubleshooting](#troubleshooting). |
-| Linux | **Experimental / untested** | An AppImage target is configured in `electron-builder.yml`, but there is no dedicated Linux smoke test and no known-install-directory fallback for CLI detection (PATH search only). Use at your own risk. |
+| macOS (Intel, x64) | **Confirmed** | DMG and zip build; packaged-app smoke test in `scripts/e2e-packaged-smoke-test-mac.cjs`. Builds are unsigned — see [Troubleshooting](#troubleshooting). |
+| macOS (Apple Silicon, arm64) | **Configured, not independently verified** | DMG and zip build via `npm run package:mac:arm64`; the packaged-app smoke test targets the x64 build only, so the arm64 output hasn't gone through the same automated check. Builds are unsigned. |
+| Linux | **Experimental** | An AppImage target is configured in `electron-builder.yml`, but there is no dedicated Linux smoke test and no known-install-directory fallback for CLI detection (PATH search only). Use at your own risk. |
 
 ## Prerequisites
 
@@ -60,17 +60,18 @@ AgentDock detects each CLI on your `PATH` (plus a few known install locations) a
 
 ## Installation
 
-### Option A: Download a packaged release
+### Option A: Download a packaged release (recommended)
 
-Build a distributable for your platform yourself using the packaging commands below (this repository does not currently publish prebuilt release binaries). Once packaged, the output lands in `release/`:
+Prebuilt builds are published on the [GitHub Releases page](https://github.com/crossainthero-lab/AgentDock/releases) — no need to install Node.js, clone the repo, or build anything yourself. Current releases are early, unsigned previews:
 
-- **Windows**: `release/*.exe` (NSIS installer) and a portable `.exe`
-- **macOS**: `release/*.dmg` and `.zip` (Intel and Apple Silicon)
-- **Linux**: `release/*.AppImage`
+- **Windows (x64)**: installer (`AgentDock Setup *.exe`) or a portable `.exe` — both under the Windows release.
+- **macOS (Intel and Apple Silicon)**: `.dmg` or `.zip` — under the macOS release.
 
-macOS builds are unsigned — see [Troubleshooting](#troubleshooting) for how to open them.
+Builds are unsigned, so Windows SmartScreen and macOS Gatekeeper will warn on first launch — see [Troubleshooting](#troubleshooting) for how to get past that.
 
-### Option B: Run from source
+### Option B: Build from source
+
+Useful if you're on Linux, want the latest unreleased changes, or are developing on AgentDock itself. Once built, the packaging commands below produce the same kind of output under `release/`.
 
 ```bash
 git clone https://github.com/crossainthero-lab/AgentDock.git
