@@ -1,4 +1,5 @@
-import { ipcMain, type BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
+import { safeHandle } from './ipc-utils'
 import { IpcChannels } from '@shared/ipc-channels'
 import type { AttachmentResolveResult, AttachmentSaveResult, CodexModelCatalogResult } from '@shared/types'
 import { codexModelCatalogService } from '../services/codex-model-catalog-service'
@@ -25,11 +26,11 @@ function responseImageContext(sessionId: string): { workspaceId: string | null; 
 }
 
 export function registerCodexIpc(window: BrowserWindow): void {
-  ipcMain.handle(IpcChannels.codexModelCatalogGet, (): CodexModelCatalogResult => {
+  safeHandle(IpcChannels.codexModelCatalogGet, (): CodexModelCatalogResult => {
     return codexModelCatalogService.getCached(currentCodexModel())
   })
 
-  ipcMain.handle(IpcChannels.codexModelCatalogRefresh, async (): Promise<CodexModelCatalogResult> => {
+  safeHandle(IpcChannels.codexModelCatalogRefresh, async (): Promise<CodexModelCatalogResult> => {
     const customPath = settingsService.get().agents.codex.customPath
     const detection = await detectionService.detect('codex', customPath)
     if (!detection.installed || !detection.executablePath) {
@@ -38,43 +39,43 @@ export function registerCodexIpc(window: BrowserWindow): void {
     return codexModelCatalogService.refresh(detection.executablePath, currentCodexModel())
   })
 
-  ipcMain.handle(IpcChannels.codexAttachmentsBrowse, (): Promise<string[]> => {
+  safeHandle(IpcChannels.codexAttachmentsBrowse, (): Promise<string[]> => {
     return codexAttachmentService.browse(window)
   })
 
-  ipcMain.handle(IpcChannels.codexAttachmentsSaveFromPath, (_event, sessionId: string, sourcePath: string): Promise<AttachmentSaveResult> => {
+  safeHandle(IpcChannels.codexAttachmentsSaveFromPath, (_event, sessionId: string, sourcePath: string): Promise<AttachmentSaveResult> => {
     return codexAttachmentService.saveFromPath(sessionId, sourcePath)
   })
 
-  ipcMain.handle(
+  safeHandle(
     IpcChannels.codexAttachmentsSaveFromDataUrl,
     (_event, sessionId: string, dataUrl: string): Promise<AttachmentSaveResult> => {
       return codexAttachmentService.saveFromDataUrl(sessionId, dataUrl)
     }
   )
 
-  ipcMain.handle(
+  safeHandle(
     IpcChannels.codexAttachmentsResolve,
     (_event, sessionId: string, attachmentPath: string): Promise<AttachmentResolveResult> => {
       return codexAttachmentService.resolve(sessionId, attachmentPath)
     }
   )
 
-  ipcMain.handle(
+  safeHandle(
     IpcChannels.codexResponseImageResolve,
     (_event, sessionId: string, requestedPath: string): Promise<AttachmentResolveResult> => {
       return codexResponseImageService.resolve({ sessionId, requestedPath, ...responseImageContext(sessionId) })
     }
   )
 
-  ipcMain.handle(
+  safeHandle(
     IpcChannels.codexResponseImageReveal,
     (_event, sessionId: string, requestedPath: string): Promise<{ ok: boolean; error?: string }> => {
       return codexResponseImageService.revealInFolder({ sessionId, requestedPath, ...responseImageContext(sessionId) })
     }
   )
 
-  ipcMain.handle(
+  safeHandle(
     IpcChannels.codexResponseImageOpenExternally,
     (_event, sessionId: string, requestedPath: string): Promise<{ ok: boolean; error?: string }> => {
       return codexResponseImageService.openExternally({ sessionId, requestedPath, ...responseImageContext(sessionId) })

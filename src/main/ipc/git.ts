@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { safeHandle } from './ipc-utils'
 import { IpcChannels } from '@shared/ipc-channels'
 import { gitService } from '../services/git-service'
 import { workspaceRepo } from '../db/repositories/workspace-repo'
@@ -10,14 +10,14 @@ function pathFor(workspaceId: string): string {
 }
 
 export function registerGitIpc(): void {
-  ipcMain.handle(IpcChannels.gitChangedFiles, (_event, workspaceId: string) =>
+  safeHandle(IpcChannels.gitChangedFiles, (_event, workspaceId: string) =>
     gitService.changedFiles(pathFor(workspaceId))
   )
-  ipcMain.handle(IpcChannels.gitDiff, (_event, workspaceId: string, filePath: string) =>
+  safeHandle(IpcChannels.gitDiff, (_event, workspaceId: string, filePath: string) =>
     gitService.diff(pathFor(workspaceId), filePath)
   )
-  ipcMain.handle(IpcChannels.gitBranch, (_event, workspaceId: string) => gitService.branch(pathFor(workspaceId)))
-  ipcMain.handle(IpcChannels.gitRevertFile, (_event, workspaceId: string, filePath: string) =>
+  safeHandle(IpcChannels.gitBranch, (_event, workspaceId: string) => gitService.branch(pathFor(workspaceId)))
+  safeHandle(IpcChannels.gitRevertFile, (_event, workspaceId: string, filePath: string) =>
     gitService.revertFile(pathFor(workspaceId), filePath)
   )
 }

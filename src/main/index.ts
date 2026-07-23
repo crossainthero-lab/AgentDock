@@ -130,8 +130,20 @@ app.whenReady().then(async () => {
 
   createWindow()
 
+  // Root cause of the reported Dock-reopen crash: window-all-closed (below)
+  // closes the database and, on macOS, deliberately leaves the app running
+  // with zero windows (Apple HIG convention — see its own comment). Without
+  // reinitializing here, a Dock click after closing every window created a
+  // fresh BrowserWindow whose IPC handlers immediately hit a closed
+  // database ("Database accessed before initDatabase() completed"). Also
+  // re-registers IPC (via registerAllIpc inside createWindow) against the
+  // new window — safe because every handler now goes through
+  // safeHandle/safeOn (see ipc-utils.ts), which replace rather than stack
+  // on top of the previous window's now-stale handlers.
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      void initDatabase().then(createWindow)
+    }
   })
 
   // Warms the Codex model catalogue cache on startup so the selector has

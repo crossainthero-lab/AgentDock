@@ -1,4 +1,5 @@
-import { ipcMain, type BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
+import { safeHandle } from './ipc-utils'
 import { IpcChannels } from '@shared/ipc-channels'
 import type { CreateSessionInput } from '@shared/types'
 import { sessionService } from '../services/session-service'
@@ -37,20 +38,20 @@ export function ensureForwarding(window: BrowserWindow, sessionId: string): void
 }
 
 export function registerSessionIpc(window: BrowserWindow): void {
-  ipcMain.handle(IpcChannels.sessionCreate, (_event, input: CreateSessionInput) => {
+  safeHandle(IpcChannels.sessionCreate, (_event, input: CreateSessionInput) => {
     const session = sessionService.create(input)
     ensureForwarding(window, session.id)
     return session
   })
 
-  ipcMain.handle(IpcChannels.sessionList, (_event, workspaceId: string) => sessionService.list(workspaceId))
+  safeHandle(IpcChannels.sessionList, (_event, workspaceId: string) => sessionService.list(workspaceId))
 
-  ipcMain.handle(IpcChannels.sessionGet, (_event, sessionId: string) => {
+  safeHandle(IpcChannels.sessionGet, (_event, sessionId: string) => {
     ensureForwarding(window, sessionId)
     return sessionService.get(sessionId)
   })
 
-  ipcMain.handle(
+  safeHandle(
     IpcChannels.sessionSendPrompt,
     async (_event, sessionId: string, text: string, turnId: string, images?: string[], displayText?: string) => {
       ensureForwarding(window, sessionId)
@@ -58,26 +59,26 @@ export function registerSessionIpc(window: BrowserWindow): void {
     }
   )
 
-  ipcMain.handle(IpcChannels.sessionInterrupt, (_event, sessionId: string) => sessionService.interrupt(sessionId))
-  ipcMain.handle(IpcChannels.sessionStop, (_event, sessionId: string) => sessionService.stop(sessionId))
-  ipcMain.handle(IpcChannels.sessionDelete, (_event, sessionId: string) => {
+  safeHandle(IpcChannels.sessionInterrupt, (_event, sessionId: string) => sessionService.interrupt(sessionId))
+  safeHandle(IpcChannels.sessionStop, (_event, sessionId: string) => sessionService.stop(sessionId))
+  safeHandle(IpcChannels.sessionDelete, (_event, sessionId: string) => {
     sessionService.delete(sessionId)
     wired.delete(sessionId)
   })
-  ipcMain.handle(IpcChannels.sessionRename, (_event, sessionId: string, title: string) => sessionService.rename(sessionId, title))
+  safeHandle(IpcChannels.sessionRename, (_event, sessionId: string, title: string) => sessionService.rename(sessionId, title))
 
-  ipcMain.handle(
+  safeHandle(
     IpcChannels.sessionRespondInteraction,
     (_event, sessionId: string, interactionId: string, optionId: string) =>
       sessionService.respondToInteraction(sessionId, interactionId, optionId)
   )
-  ipcMain.handle(IpcChannels.sessionSetModel, (_event, sessionId: string, modelId: string) =>
+  safeHandle(IpcChannels.sessionSetModel, (_event, sessionId: string, modelId: string) =>
     sessionService.setModel(sessionId, modelId)
   )
-  ipcMain.handle(IpcChannels.sessionRunCommand, (_event, sessionId: string, commandId: string) =>
+  safeHandle(IpcChannels.sessionRunCommand, (_event, sessionId: string, commandId: string) =>
     sessionService.runCommand(sessionId, commandId)
   )
-  ipcMain.handle(IpcChannels.sessionOpenExternalTerminal, (_event, sessionId: string) =>
+  safeHandle(IpcChannels.sessionOpenExternalTerminal, (_event, sessionId: string) =>
     sessionService.openExternalTerminal(sessionId)
   )
 }

@@ -1,4 +1,5 @@
-import { app, ipcMain } from 'electron'
+import { app } from 'electron'
+import { safeHandle } from './ipc-utils'
 import { IpcChannels } from '@shared/ipc-channels'
 import type { AgentModelOption } from '@shared/types'
 import { claudeModelCatalogService } from '../services/claude-model-catalog-service'
@@ -21,11 +22,11 @@ function catalogCwd(): string {
 }
 
 export function registerClaudeIpc(): void {
-  ipcMain.handle(IpcChannels.claudeModelCatalogGet, (): AgentModelOption[] => {
+  safeHandle(IpcChannels.claudeModelCatalogGet, (): AgentModelOption[] => {
     return claudeModelCatalogService.getCached()
   })
 
-  ipcMain.handle(IpcChannels.claudeModelCatalogRefresh, async (): Promise<AgentModelOption[]> => {
+  safeHandle(IpcChannels.claudeModelCatalogRefresh, async (): Promise<AgentModelOption[]> => {
     const customPath = settingsService.get().agents['claude-code'].customPath
     const detection = await detectionService.detect('claude-code', customPath)
     if (!detection.installed || !detection.executablePath) {
