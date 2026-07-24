@@ -1,0 +1,175 @@
+.ad-file-explorer {
+  width: 320px;
+  min-width: 260px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-surface);
+  border-left: 1px solid var(--color-border);
+  height: 100%;
+}
+
+.ad-file-explorer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.ad-file-explorer__header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.ad-file-explorer__notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: 12px;
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-bottom: 1px solid var(--color-border);
+}
+.ad-file-explorer__notice button {
+  text-decoration: underline;
+  flex-shrink: 0;
+}
+
+.ad-file-explorer__tree {
+  flex: 1 1 50%;
+  min-height: 80px;
+  overflow-y: auto;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Preview disabled — the tree takes the whole body instead of sharing it
+ * with an empty preview pane. */
+.ad-file-explorer__tree--full {
+  flex: 1 1 auto;
+  border-bottom: none;
+}
+
+.ad-file-explorer__loading,
+.ad-file-explorer__error,
+.ad-file-explorer__empty {
+  padding: var(--space-4);
+  font-size: 12.5px;
+  color: var(--color-text-tertiary);
+  display: flex;
+  justify-content: center;
+}
+.ad-file-explorer__error {
+  color: var(--color-danger);
+}
+
+.ad-file-explorer__preview {
+  flex: 1 1 50%;
+  min-height: 100px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* File tree rows — shared by every depth via FileTreeNode.tsx */
+.ad-file-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ad-file-tree__row:hover {
+  background: var(--color-bg-hover);
+}
+.ad-file-tree__row--selected {
+  background: var(--color-bg-selected);
+  color: var(--color-accent);
+}
+
+.ad-file-tree__chevron {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+}
+.ad-file-tree__chevron-spacer {
+  display: inline-block;
+  width: 13px;
+  flex-shrink: 0;
+}
+.ad-file-tree__icon {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+}
+.ad-file-tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ad-file-tree__loading,
+.ad-file-tree__error,
+.ad-file-tree__empty {
+  padding: 4px var(--space-2);
+  font-size: 11.5px;
+  color: var(--color-text-tertiary);
+}
+.ad-file-tree__error {
+  color: var(--color-danger);
+}
+
+/* File preview */
+.ad-file-preview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ad-file-preview--empty {
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
+  text-align: center;
+}
+.ad-file-preview--text {
+  overflow: auto;
+}
+.ad-file-preview--text .ad-codeblock {
+  border: none;
+  border-radius: 0;
+}
+.ad-file-preview__truncated {
+  padding: var(--space-2) var(--space-4);
+  font-size: 11.5px;
+  color: var(--color-text-tertiary);
+  border-top: 1px solid var(--color-border);
+}
+.ad-file-preview__image-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  overflow: auto;
+}
+.ad-file-preview__image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  background: repeating-conic-gradient(var(--color-bg-app) 0% 25%, var(--color-bg-surface-raised) 0% 50%) 50% / 16px 16px;
+}

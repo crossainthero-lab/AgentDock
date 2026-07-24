@@ -35,3 +35,9 @@
 .ad-diagnostics-grid__path {
   word-break: break-all;
 }
+
+.ad-advanced-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

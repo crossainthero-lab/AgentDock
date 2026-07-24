@@ -251,6 +251,45 @@ export interface AttachmentResolveResult {
   error?: string
 }
 
+/** One immediate child of a listed directory — the file explorer only ever
+ *  fetches one level at a time (lazy expansion), so this never carries
+ *  nested children itself. */
+export interface FileEntry {
+  name: string
+  /** Posix-style (forward slash), relative to the workspace root — never
+   *  an absolute filesystem path, so it's safe to hand back to `fs.read`/
+   *  `fs.list`/`fs.importFiles` without leaking real disk layout. */
+  relPath: string
+  isDirectory: boolean
+  size: number | null
+  mtimeMs: number | null
+}
+
+/** Result of listing one directory. `error` is set (and `entries` empty)
+ *  when the path doesn't exist or has since fallen outside the workspace
+ *  (e.g. the workspace was closed/deleted mid-request). */
+export interface FileListResult {
+  entries: FileEntry[]
+  error?: string
+}
+
+export type FilePreview =
+  | { kind: 'text'; content: string; truncated: boolean }
+  | { kind: 'image'; dataUrl: string }
+  | { kind: 'unsupported'; reason: string }
+  | { kind: 'error'; error: string }
+
+/** Result of importing one file into the workspace — `relPath` is null
+ *  when `error` is set (skipped/failed), otherwise the new workspace-
+ *  relative path the user can reference in chat. */
+export interface ImportFileResult {
+  sourceName: string
+  targetName: string
+  relPath: string | null
+  size?: number | null
+  error?: string
+}
+
 export interface Diagnostics {
   appVersion: string
   electronVersion: string

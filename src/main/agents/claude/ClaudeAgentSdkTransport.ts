@@ -12,7 +12,33 @@
 // ERR_REQUIRE_ESM. It's loaded via a cached dynamic `import()` instead;
 // only types are imported statically (erased at compile time, never
 // reach runtime as a require call).
-import type { CanUseTool, EffortLevel, Options, PermissionMode, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type {
+  CanUseTool,
+  EffortLevel,
+  Options,
+  PermissionMode,
+  Query,
+  SDKMessage,
+  SDKUserMessage,
+  SpawnOptions as ClaudeSpawnOptions,
+  SpawnedProcess
+} from '@anthropic-ai/claude-agent-sdk'
+// Not the SDK's own default spawn — confirmed by reading its compiled
+// source (sdk.mjs): it calls raw `child_process.spawn(command, args, {...})`
+// with no shell option and no Windows `.cmd`/`.bat` awareness, which fails
+// with `spawn <path> EINVAL` whenever `pathToClaudeCodeExecutable` resolves
+// to a `.cmd` shim (the normal shape for a Claude Code install that
+// produces an npm-style Windows shim rather than a native .exe — the exact
+// real-world portability bug this fixes). The SDK's own
+// `spawnClaudeCodeProcess` option (documented as the sanctioned way to
+// "run Claude Code in VMs, containers, or remote environments") is used
+// here specifically to substitute cross-spawn, which resolves and safely
+// re-invokes a `.cmd`/`.bat` target through cmd.exe with correct argument
+// escaping — same mechanism already used by vscode-launcher-service.ts and
+// codex-model-catalog-service.ts.
+import crossSpawn from 'cross-spawn'
+import { validateSpawnPlan } from '../../services/spawn-guard'
+import { buildSpawnDiagnostics, formatSpawnDiagnostics } from '../../services/spawn-diagnostics'
 
 type ClaudeAgentSdkModule = typeof import('@anthropic-ai/claude-agent-sdk')
 
@@ -93,6 +119,63 @@ function normalizePermissionMode(mode: string): PermissionMode | undefined {
   return VALID_SDK_PERMISSION_MODES.has(mode as PermissionMode) ? (mode as PermissionMode) : undefined
 }
 
+/** Replaces the SDK's own internal spawn — see the import comment above
+ *  for why. `options.command`/`options.args` here are already exactly what
+ *  the SDK's own spawnLocalProcess would have used (it decides, before
+ *  this is called, whether `command` is the executable itself or `node`/
+ *  `bun` with the real path folded into `args`) — cross-spawn is hooked in
+ *  purely as a safe drop-in replacement for the actual spawn call, not a
+ *  reimplementation of that decision. Validated through the same
+ *  centralized pre-spawn guard every other launch path in AgentDock uses,
+ *  so a malformed cwd/args/env here fails with a clear AgentDock error
+ *  rather than a raw spawn EINVAL. */
+function spawnClaudeCodeProcess(options: ClaudeSpawnOptions): SpawnedProcess {
+  try {
+    validateSpawnPlan({ command: options.command, args: options.args, cwd: options.cwd, env: options.env })
+  } catch (error) {
+    const diagnostics = buildSpawnDiagnostics({
+      agentId: 'claude-code',
+      mechanism: 'sdk-spawn (spawnClaudeCodeProcess override)',
+      executablePath: options.command,
+      args: options.args,
+      cwd: options.cwd,
+      error
+    })
+    console.error('[claude-sdk] spawn validation failed:', formatSpawnDiagnostics(diagnostics))
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n\n${formatSpawnDiagnostics(diagnostics)}`)
+  }
+
+  const child = crossSpawn(options.command, options.args, {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    signal: options.signal,
+    windowsHide: true
+  })
+  child.stderr?.on('data', (chunk: Buffer) => {
+    console.warn(`[claude-sdk] stderr: ${chunk.toString('utf8').trim()}`)
+  })
+  // Best-effort diagnostic logging for an async OS-level spawn failure
+  // (validation above already passed, so this is Windows/the OS itself
+  // rejecting the spawn) — the SDK's own 'error' listener still drives what
+  // the user sees in chat (it wraps this same error as "Failed to spawn
+  // Claude Code process: ..."); this only ensures the full diagnostic
+  // block is never lost, even when it can't be woven into that specific
+  // message.
+  child.once('error', (error) => {
+    const diagnostics = buildSpawnDiagnostics({
+      agentId: 'claude-code',
+      mechanism: 'sdk-spawn (spawnClaudeCodeProcess override)',
+      executablePath: options.command,
+      args: options.args,
+      cwd: options.cwd,
+      error
+    })
+    console.error('[claude-sdk] spawn failed asynchronously:', formatSpawnDiagnostics(diagnostics))
+  })
+  return child as unknown as SpawnedProcess
+}
+
 /** One per AgentDock Claude session. Call `start(prompt)` for the first
  *  turn; every subsequent turn calls `start(prompt)` again — if a Query is
  *  already running it's reused (pushed into), otherwise a fresh one is
@@ -154,7 +237,8 @@ export class ClaudeAgentSdkTransport {
         resume: this.opts.nativeSessionId ?? undefined,
         includePartialMessages: true,
         canUseTool: this.opts.canUseTool,
-        env: this.opts.env
+        env: this.opts.env,
+        spawnClaudeCodeProcess
       }
       this.query = query({ prompt: this.input as PushableAsyncIterable<SDKUserMessage>, options })
 

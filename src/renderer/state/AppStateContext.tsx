@@ -47,6 +47,9 @@ interface AppState {
   settingsViewOpen: boolean
   setSettingsViewOpen: (open: boolean) => void
 
+  fileExplorerOpen: boolean
+  setFileExplorerOpen: (open: boolean) => void
+
   sidebarCollapsed: boolean
   toggleSidebar: () => void
 }
@@ -66,6 +69,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
 
   const [settings, setSettings] = useState<Settings | null>(null)
   const [settingsViewOpen, setSettingsViewOpen] = useState(false)
+  const [fileExplorerOpen, setFileExplorerOpen] = useState(false)
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
@@ -214,6 +218,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
       updateSettings,
       settingsViewOpen,
       setSettingsViewOpen,
+      fileExplorerOpen,
+      setFileExplorerOpen,
       sidebarCollapsed,
       toggleSidebar: () => setSidebarCollapsed((v) => !v)
     }),
@@ -240,6 +246,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
       settings,
       updateSettings,
       settingsViewOpen,
+      fileExplorerOpen,
       sidebarCollapsed
     ]
   )

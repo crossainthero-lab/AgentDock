@@ -25,6 +25,11 @@
   padding-left: 70px;
 }
 
+.ad-titlebar__icon {
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
 .ad-titlebar__logo {
   font-size: 12.5px;
   font-weight: 600;

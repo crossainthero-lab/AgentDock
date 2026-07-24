@@ -1,9 +1,10 @@
 import type React from 'react'
 import { useEffect, useState } from 'react'
-import { GitBranch, Minus, Settings as SettingsIcon, Square, X } from 'lucide-react'
+import { FolderTree, GitBranch, Minus, Settings as SettingsIcon, Square, X } from 'lucide-react'
 import { getAgentDock } from '../../lib/agentDockClient'
 import { useAppState } from '../../state/AppStateContext'
 import { IconButton } from '../ui/IconButton'
+import appIcon from '../../assets/icon.png'
 import './TitleBar.css'
 
 // macOS gets its own native traffic-light controls (see main/index.ts's
@@ -12,8 +13,16 @@ import './TitleBar.css'
 const isMac = getAgentDock().platform === 'darwin'
 
 export function TitleBar(): React.JSX.Element {
-  const { workspace, projects, sessionsByProject, selectedSessionId, newSessionProjectId, setSettingsViewOpen } =
-    useAppState()
+  const {
+    workspace,
+    projects,
+    sessionsByProject,
+    selectedSessionId,
+    newSessionProjectId,
+    setSettingsViewOpen,
+    fileExplorerOpen,
+    setFileExplorerOpen
+  } = useAppState()
   const [isMaximized, setIsMaximized] = useState(false)
   const [branch, setBranch] = useState<string | null>(null)
 
@@ -53,6 +62,7 @@ export function TitleBar(): React.JSX.Element {
   return (
     <div className={`ad-titlebar drag${isMac ? ' ad-titlebar--mac' : ''}`}>
       <div className="ad-titlebar__left">
+        <img className="ad-titlebar__icon" src={appIcon} alt="" width={16} height={16} />
         <span className="ad-titlebar__logo">AgentDock</span>
         {activeProject && (
           <>
@@ -69,6 +79,15 @@ export function TitleBar(): React.JSX.Element {
       </div>
 
       <div className="ad-titlebar__right no-drag">
+        <IconButton
+          label="Toggle file explorer"
+          size="sm"
+          active={fileExplorerOpen}
+          disabled={!activeProject}
+          onClick={() => setFileExplorerOpen(!fileExplorerOpen)}
+        >
+          <FolderTree size={15} />
+        </IconButton>
         <IconButton label="Settings" size="sm" onClick={() => setSettingsViewOpen(true)}>
           <SettingsIcon size={15} />
         </IconButton>

@@ -19,14 +19,26 @@ function makeMockProc(): MockProc {
   return proc
 }
 
-vi.mock('node:child_process', () => {
+// codex-model-catalog-service.ts spawns via cross-spawn now (not raw
+// node:child_process) — see that file's own comment: a plain spawn()
+// cannot launch a Windows .cmd/.bat shim, which is exactly what Codex
+// resolves to when installed via a method that produces one (e.g. `npm
+// install -g`), and this call runs unconditionally at every app startup.
+vi.mock('cross-spawn', () => {
   const spawn = vi.fn((command: string, args: string[]) => {
     const proc = makeMockProc()
     spawnCalls.push({ command, args, proc })
     return proc
   })
-  return { spawn, default: { spawn } }
+  return { default: spawn }
 })
+
+// Real, always-existing file — spawn-guard.ts's validateSpawnPlan() now
+// requires an absolute executable path to actually exist on disk before
+// ever reaching cross-spawn, so tests need a real file here rather than a
+// made-up path like 'C:\codex\codex.exe' that doesn't exist on the test
+// runner's machine. Any real file works; the mock never actually executes it.
+const REAL_EXECUTABLE_PATH = process.execPath
 
 const repoState = vi.hoisted(() => ({ cached: null as { models: unknown[]; fetchedAt: string } | null }))
 vi.mock('../../src/main/db/repositories/codex-model-catalog-repo', () => ({
@@ -85,12 +97,12 @@ describe('codexModelCatalogService.fetchLive', () => {
   })
 
   it('spawns `codex app-server`, initializes, and maps a real single-page model/list response', async () => {
-    const promise = codexModelCatalogService.fetchLive('C:\\codex\\codex.exe')
+    const promise = codexModelCatalogService.fetchLive(REAL_EXECUTABLE_PATH)
     await Promise.resolve()
     await Promise.resolve()
 
     expect(spawnCalls).toHaveLength(1)
-    expect(spawnCalls[0].command).toBe('C:\\codex\\codex.exe')
+    expect(spawnCalls[0].command).toBe(REAL_EXECUTABLE_PATH)
     expect(spawnCalls[0].args).toEqual(['app-server'])
 
     const proc = spawnCalls[0].proc

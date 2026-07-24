@@ -1,6 +1,6 @@
 {
   "name": "agentdock",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A simple desktop interface for running Claude Code, Codex, and Antigravity coding agents on your local projects.",
   "main": "./out/main/index.js",
   "author": "AgentDock",
@@ -28,6 +28,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/headless": "^6.0.0",
     "@xterm/xterm": "^5.5.0",
+    "cross-spawn": "^7.0.6",
     "framer-motion": "^11.15.0",
     "lucide-react": "^0.469.0",
     "node-pty": "^1.1.0",
@@ -45,6 +46,7 @@
     "@electron/rebuild": "^3.6.1",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22.10.5",
     "@types/prismjs": "^1.26.6",
     "@types/react": "^18.3.18",
@@ -56,6 +58,7 @@
     "electron-vite": "^2.3.0",
     "jsdom": "^25.0.1",
     "playwright": "^1.61.1",
+    "rcedit": "^5.0.2",
     "typescript": "^5.7.2",
     "vite": "^5.4.11",
     "vitest": "^2.1.8"

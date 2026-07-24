@@ -32,6 +32,12 @@ select {
 
 button {
   cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: 0;
+  appearance: none;
+  padding: 0;
+  text-align: inherit;
 }
 
 button:disabled {

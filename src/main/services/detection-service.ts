@@ -1,4 +1,14 @@
-import { execFile } from 'node:child_process'
+// Not node:child_process's execFile with shell:true — that combination is
+// exactly what Node's own DEP0190 deprecation warns about ("arguments are
+// not escaped, only concatenated"), and the previous version of this file
+// used it specifically to let a Windows `.cmd`/`.bat` candidate run at all.
+// cross-spawn achieves the same "a .cmd/.bat shim actually runs" goal
+// without that unsafe-concatenation risk (a candidate path containing a
+// space, parenthesis, or other shell metacharacter is passed through as one
+// literal argument, never re-parsed as shell syntax) — same fix already
+// applied to vscode-launcher-service.ts, codex-model-catalog-service.ts,
+// and ClaudeAgentSdkTransport.ts.
+import spawn from 'cross-spawn'
 import type { AgentDetection, AgentId } from '@shared/types'
 import {
   describeResolutionFailure,
@@ -7,6 +17,7 @@ import {
   type ValidateCandidate,
   type ValidationOutcome
 } from './executable-resolver'
+import { validateSpawnPlan } from './spawn-guard'
 
 interface DetectionSpec {
   agentId: AgentId
@@ -53,36 +64,58 @@ const PROBE_TIMEOUT_MS = 5000
  *  file that happens to exist with the right name (see
  *  executable-resolver.ts's module comment for the exact bug this
  *  prevents: an existsSync-only check previously accepted a POSIX shell
- *  shim that Windows cannot execute). `shell: true` is only used on
- *  Windows, where it's required (not optional) — it's what lets that
- *  platform's code path correctly launch a native .exe, an npm .cmd shim,
- *  or a .bat file uniformly, since CreateProcess itself cannot execute
- *  .cmd/.bat directly. On macOS/Linux a real executable's shebang line is
- *  interpreted by the kernel itself, so no shell is needed to run it — and
- *  deliberately skipping the shell there avoids a real quoting bug: Node's
- *  shell:true mode joins the executable path and args with plain spaces
- *  with NO escaping (confirmed in Node's own child_process source), so a
- *  path containing a space (e.g. a custom override under a directory whose
- *  name has one) would silently be split into multiple words and fail to
- *  resolve. Spawning directly (shell:false) passes the path and args as an
- *  argv array with no shell involved, so spaces/quotes/Unicode in either
- *  are handled correctly by construction — and it's also strictly safer,
- *  since there is no shell to inject through. */
+ *  shim that Windows cannot execute). cross-spawn correctly launches a
+ *  native .exe, an npm .cmd shim, or a .bat file uniformly on Windows
+ *  (routing a shim through cmd.exe only when actually needed, with args
+ *  safely escaped) and runs a real executable directly (no shell at all)
+ *  everywhere else — so spaces, quotes, or Unicode in the path/args are
+ *  handled correctly by construction on every platform, with no risk of a
+ *  path being silently split into multiple words the way naive
+ *  `shell: true` + an args array is (see spawn-guard.ts/DEP0190). */
 function probeCandidate(executable: string, args: string[]): Promise<ValidationOutcome> {
-  const useShell = process.platform === 'win32'
+  try {
+    validateSpawnPlan({ command: executable, args })
+  } catch (err) {
+    return Promise.resolve({ ok: false, reason: err instanceof Error ? err.message : String(err) })
+  }
+
   return new Promise((resolve) => {
-    execFile(executable, args, { shell: useShell, timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (error, stdout, stderr) => {
-      if (error) {
-        const reason =
-          'code' in error && error.code === 'ETIMEDOUT'
-            ? `timed out after ${PROBE_TIMEOUT_MS}ms`
-            : (error as NodeJS.ErrnoException).code
-              ? `${(error as NodeJS.ErrnoException).code}: ${error.message}`
-              : error.message
-        resolve({ ok: false, reason })
-        return
-      }
-      resolve({ ok: true, output: stdout || stderr || '' })
+    let settled = false
+    let stdout = ''
+    let stderr = ''
+
+    const child = spawn(executable, args, { windowsHide: true })
+
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.kill()
+      resolve({ ok: false, reason: `timed out after ${PROBE_TIMEOUT_MS}ms` })
+    }, PROBE_TIMEOUT_MS)
+
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk
+    })
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+
+    child.once('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      const code = (err as NodeJS.ErrnoException).code
+      resolve({ ok: false, reason: code ? `${code}: ${err.message}` : err.message })
+    })
+
+    child.once('exit', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (code === 0) resolve({ ok: true, output: stdout || stderr })
+      else resolve({ ok: false, reason: `exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ''}` })
     })
   })
 }
@@ -161,6 +194,12 @@ export const detectionService = {
     const spec = SPECS.find((s) => s.agentId === agentId)
     if (!spec) throw new Error(`Unknown agent id: ${agentId}`)
     return spec.candidates[0]
+  },
+
+  structuredOutputFor(agentId: AgentId): boolean {
+    const spec = SPECS.find((s) => s.agentId === agentId)
+    if (!spec) throw new Error(`Unknown agent id: ${agentId}`)
+    return spec.structuredOutput
   },
 
   /** Explicit "Test" action for the Settings UI: validates one specific

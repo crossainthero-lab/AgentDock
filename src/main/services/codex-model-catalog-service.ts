@@ -20,9 +20,22 @@
 // (app start, explicit refresh, permission-mode-style re-detection) so the
 // extra process-startup latency (a few hundred ms) is a fine trade for the
 // simplicity.
-import { spawn } from 'node:child_process'
+// Not node:child_process's own `spawn` — `executablePath` here is whatever
+// detection-service.ts resolved on the current machine, which is a `.cmd`
+// shim whenever Codex was installed via a method that produces one (e.g.
+// `npm install -g`). Windows cannot CreateProcess a `.cmd` file directly;
+// raw spawn() fails with `spawn <path> EINVAL` the moment that happens —
+// confirmed the actual root cause of a real "fresh Windows install always
+// EINVALs" report: this call runs unconditionally at every app startup
+// (see main/index.ts's warm-cache step) whenever Codex is detected, making
+// it the very first thing to fail on such a machine. cross-spawn resolves
+// and safely re-invokes a `.cmd`/`.bat` target through cmd.exe with correct
+// argument escaping — the same fix already applied to vscode-launcher-
+// service.ts, now applied here too.
+import spawn from 'cross-spawn'
 import type { AgentModelOption, CodexModelCatalogResult } from '@shared/types'
 import { codexModelCatalogRepo } from '../db/repositories/codex-model-catalog-repo'
+import { validateSpawnPlan } from './spawn-guard'
 
 interface JsonRpcResponse {
   id?: number
@@ -62,6 +75,7 @@ class AppServerClient {
   private readonly proc: ReturnType<typeof spawn>
 
   constructor(executablePath: string) {
+    validateSpawnPlan({ command: executablePath, args: ['app-server'] })
     this.proc = spawn(executablePath, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
     this.proc.stdout?.setEncoding('utf8')
     this.proc.stdout?.on('data', (chunk: string) => this.onData(chunk))
@@ -169,7 +183,7 @@ export const codexModelCatalogService = {
     try {
       const work = (async () => {
         const initResponse = await client.call('initialize', {
-          clientInfo: { name: 'AgentDock', version: '0.1.0' }
+          clientInfo: { name: 'AgentDock', version: '0.1.1' }
         })
         if (initResponse.error) throw new Error(`initialize failed: ${initResponse.error.message}`)
         const raw = await fetchAllPages(client)

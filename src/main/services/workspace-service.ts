@@ -1,4 +1,5 @@
 import { dialog, type BrowserWindow } from 'electron'
+import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { workspaceRepo } from '../db/repositories/workspace-repo'
 import { sessionRepo } from '../db/repositories/session-repo'
@@ -60,5 +61,29 @@ export const workspaceService = {
     }
     workspaceRepo.delete(id)
     if (currentWorkspace?.id === id) currentWorkspace = null
+  },
+
+  /** Read-only check for the Settings "reset stale configuration" action —
+   *  never called automatically (e.g. never on startup), since a path
+   *  that's merely temporarily unavailable (an unmounted external drive, a
+   *  disconnected network share) isn't actually invalid, just not present
+   *  right now. Whether to actually remove one of these is always the
+   *  user's own explicit choice — see removeMissingWorkspaces(). */
+  findMissingWorkspaces(): Workspace[] {
+    return workspaceRepo.list().filter((w) => !existsSync(w.path))
+  },
+
+  /** Removes exactly the workspace ROWS (and their sessions/messages, via
+   *  the same stop+cascade path delete() already uses) whose folder
+   *  doesn't exist on THIS machine — never touches anything on disk; a
+   *  "removed" project's real files (if they exist anywhere) are
+   *  completely unaffected, only AgentDock's own bookkeeping entry for a
+   *  path that doesn't resolve to anything is cleared. */
+  removeMissingWorkspaces(): Workspace[] {
+    const missing = this.findMissingWorkspaces()
+    for (const workspace of missing) {
+      this.delete(workspace.id)
+    }
+    return missing
   }
 }

@@ -305,6 +305,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           imagesEnabled={session.agentId === 'codex' || session.agentId === 'antigravity'}
           attachmentBackend={attachmentBackend}
           sessionId={sessionId}
+          workspaceId={session.workspaceId}
           onSend={(text, images) => {
             setActionError(null)
             conversation

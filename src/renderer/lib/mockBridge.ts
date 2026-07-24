@@ -16,7 +16,11 @@ import type {
   ChangedFile,
   CreateSessionInput,
   DiffResult,
+  FileEntry,
+  FileListResult,
+  FilePreview,
   HandoffExecuteInput,
+  ImportFileResult,
   Session,
   SessionMessage,
   SessionWithMessages,
@@ -42,6 +46,55 @@ if (typeof window !== 'undefined' && !window.agentDock) {
 
   const eventListeners = new Map<string, Set<(payload: SessionEventPayload) => void>>()
   const sequenceCounters = new Map<string, number>()
+
+  // A tiny synthetic project tree for exercising the file-explorer panel in
+  // this browser preview — not real project data, same spirit as the fake
+  // '/preview/sample-project' workspace path above. A 1x1 transparent PNG
+  // stands in for a real image preview.
+  const TINY_PNG_DATA_URL =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+  type MockNode =
+    | { type: 'dir'; children: Record<string, MockNode> }
+    | { type: 'text'; content: string }
+    | { type: 'image' }
+    | { type: 'binary' }
+  const mockTree: MockNode = {
+    type: 'dir',
+    children: {
+      'README.md': { type: 'text', content: '# Sample Project\n\nThis is a synthetic tree shown only in the browser preview.\n' },
+      'package.json': { type: 'text', content: '{\n  "name": "sample-project",\n  "version": "0.0.1"\n}\n' },
+      src: {
+        type: 'dir',
+        children: {
+          'index.ts': { type: 'text', content: "export function main(): void {\n  console.log('hello from the preview')\n}\n" },
+          components: {
+            type: 'dir',
+            children: {
+              'Button.tsx': { type: 'text', content: "export function Button(): null {\n  return null\n}\n" }
+            }
+          }
+        }
+      },
+      assets: {
+        type: 'dir',
+        children: {
+          'logo.png': { type: 'image' }
+        }
+      },
+      'notes.bin': { type: 'binary' }
+    }
+  }
+
+  function mockNodeAt(relPath: string): MockNode | null {
+    if (!relPath) return mockTree
+    const segments = relPath.split('/').filter(Boolean)
+    let node: MockNode = mockTree
+    for (const segment of segments) {
+      if (node.type !== 'dir' || !node.children[segment]) return null
+      node = node.children[segment]
+    }
+    return node
+  }
 
   function addMessage(sessionId: string, message: SessionMessage): void {
     const list = messages.get(sessionId) ?? []
@@ -126,6 +179,12 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       async setCollapsed(id, collapsed) {
         if (workspace && workspace.id === id) workspace = { ...workspace, collapsed }
+      },
+      async findMissing() {
+        return []
+      },
+      async removeMissing() {
+        return []
       }
     },
     agents: {
@@ -322,7 +381,7 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       async getDiagnostics() {
         return {
-          appVersion: '0.1.0 (browser preview)',
+          appVersion: '0.1.1 (browser preview)',
           electronVersion: 'n/a',
           chromeVersion: navigator.userAgent,
           nodeVersion: 'n/a',
@@ -331,6 +390,9 @@ if (typeof window !== 'undefined' && !window.agentDock) {
           userDataPath: 'n/a (browser preview)',
           databasePath: 'n/a (browser preview)'
         }
+      },
+      async resetAgentDetection() {
+        return settings
       }
     },
     terminal: {
@@ -381,6 +443,63 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       onMaximizeChange() {
         return () => {}
+      }
+    },
+    filesystem: {
+      async list(_workspaceId, relPath): Promise<FileListResult> {
+        const node = mockNodeAt(relPath)
+        if (!node || node.type !== 'dir') return { entries: [], error: 'Path not found.' }
+        const entries: FileEntry[] = Object.entries(node.children)
+          .map(([name, child]) => ({
+            name,
+            relPath: relPath ? `${relPath}/${name}` : name,
+            isDirectory: child.type === 'dir',
+            size: child.type === 'text' ? child.content.length : child.type === 'image' ? 1024 : child.type === 'binary' ? 2048 : null,
+            mtimeMs: null
+          }))
+          .sort((a, b) => (a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1))
+        return { entries }
+      },
+      async read(_workspaceId, relPath): Promise<FilePreview> {
+        const node = mockNodeAt(relPath)
+        if (!node) return { kind: 'error', error: 'File not found.' }
+        if (node.type === 'dir') return { kind: 'error', error: 'Not a file.' }
+        if (node.type === 'image') return { kind: 'image', dataUrl: TINY_PNG_DATA_URL }
+        if (node.type === 'binary') return { kind: 'unsupported', reason: 'This file type cannot be previewed.' }
+        return { kind: 'text', content: node.content, truncated: false }
+      },
+      async checkImportConflicts(_workspaceId, destRelPath, fileNames) {
+        const node = mockNodeAt(destRelPath)
+        if (!node || node.type !== 'dir') return []
+        return fileNames.filter((name) => name in node.children)
+      },
+      async browseImportFiles() {
+        return []
+      },
+      async importFiles(_workspaceId, _destRelPath, files): Promise<ImportFileResult[]> {
+        return files.map((f) => ({
+          sourceName: f.sourcePath.split(/[/\\]/).pop() ?? f.sourcePath,
+          targetName: f.targetName,
+          relPath: null,
+          error: 'Importing files is not available in this browser preview.'
+        }))
+      },
+      async importFileAutoRename(_workspaceId, _destRelPath, sourcePath): Promise<ImportFileResult> {
+        const name = sourcePath.split(/[/\\]/).pop() ?? sourcePath
+        return { sourceName: name, targetName: name, relPath: null, error: 'Attaching files is not available in this browser preview.' }
+      },
+      async importFromDataUrl(_workspaceId, _destRelPath, fileName): Promise<ImportFileResult> {
+        return { sourceName: fileName, targetName: fileName, relPath: null, error: 'Attaching files is not available in this browser preview.' }
+      },
+      async watch() {
+        return { ok: true }
+      },
+      async unwatch() {},
+      onChanged() {
+        return () => {}
+      },
+      async showContextMenu() {
+        console.info('[AgentDock] The file-explorer context menu is a native Electron menu — not available in this browser preview.')
       }
     }
   }

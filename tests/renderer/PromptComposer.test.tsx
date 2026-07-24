@@ -92,7 +92,7 @@ describe('PromptComposer', () => {
     expect(onInterrupt).toHaveBeenCalled()
   })
 
-  it('does not render the attachment button when imagesEnabled is false (Claude sessions)', () => {
+  it('renders the attachment button even when imagesEnabled is false (Claude sessions) — generic file attachment works for every agent', () => {
     const { container } = render(
       <PromptComposer
         disabled={false}
@@ -102,9 +102,10 @@ describe('PromptComposer', () => {
         onInterrupt={vi.fn()}
         imagesEnabled={false}
         sessionId="s1"
+        workspaceId="w1"
       />
     )
-    expect(container.querySelector('.ad-composer__attach')).toBeNull()
+    expect(container.querySelector('.ad-composer__attach')).not.toBeNull()
   })
 
   it('renders the attachment button when imagesEnabled is true (Codex sessions)', () => {
@@ -117,8 +118,25 @@ describe('PromptComposer', () => {
         onInterrupt={vi.fn()}
         imagesEnabled
         sessionId="s1"
+        workspaceId="w1"
       />
     )
     expect(container.querySelector('.ad-composer__attach')).not.toBeNull()
+  })
+
+  it('disables the attachment button when no workspace is open', () => {
+    const { container } = render(
+      <PromptComposer
+        disabled={false}
+        disabledReason={null}
+        isRunning={false}
+        onSend={vi.fn()}
+        onInterrupt={vi.fn()}
+        imagesEnabled={false}
+        sessionId="s1"
+        workspaceId={null}
+      />
+    )
+    expect(container.querySelector('.ad-composer__attach')).toBeDisabled()
   })
 })

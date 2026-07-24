@@ -9,6 +9,8 @@ export const IpcChannels = {
   workspaceRename: 'workspace:rename',
   workspaceDelete: 'workspace:delete',
   workspaceSetCollapsed: 'workspace:setCollapsed',
+  workspaceFindMissing: 'workspace:findMissing',
+  workspaceRemoveMissing: 'workspace:removeMissing',
 
   agentsList: 'agents:list',
   agentsDetect: 'agents:detect',
@@ -72,6 +74,7 @@ export const IpcChannels = {
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
   settingsDiagnostics: 'settings:diagnostics',
+  settingsResetAgentDetection: 'settings:resetAgentDetection',
 
   terminalWrite: 'terminal:write',
   terminalResize: 'terminal:resize',
@@ -86,5 +89,17 @@ export const IpcChannels = {
   windowMaximize: 'window:maximize',
   windowClose: 'window:close',
   windowIsMaximized: 'window:isMaximized',
-  windowMaximizeChange: 'window:maximizeChange'
+  windowMaximizeChange: 'window:maximizeChange',
+
+  fsList: 'fs:list',
+  fsRead: 'fs:read',
+  fsCheckImportConflicts: 'fs:checkImportConflicts',
+  fsBrowseImportFiles: 'fs:browseImportFiles',
+  fsImportFiles: 'fs:importFiles',
+  fsImportFileAutoRename: 'fs:importFileAutoRename',
+  fsImportFromDataUrl: 'fs:importFromDataUrl',
+  fsWatch: 'fs:watch',
+  fsUnwatch: 'fs:unwatch',
+  fsChanged: 'fs:changed',
+  fsShowContextMenu: 'fs:showContextMenu'
 } as const

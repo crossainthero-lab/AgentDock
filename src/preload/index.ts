@@ -16,7 +16,9 @@ const api: AgentDockApi = {
     close: () => ipcRenderer.invoke(IpcChannels.workspaceClose),
     rename: (id, name) => ipcRenderer.invoke(IpcChannels.workspaceRename, id, name),
     delete: (id) => ipcRenderer.invoke(IpcChannels.workspaceDelete, id),
-    setCollapsed: (id, collapsed) => ipcRenderer.invoke(IpcChannels.workspaceSetCollapsed, id, collapsed)
+    setCollapsed: (id, collapsed) => ipcRenderer.invoke(IpcChannels.workspaceSetCollapsed, id, collapsed),
+    findMissing: () => ipcRenderer.invoke(IpcChannels.workspaceFindMissing),
+    removeMissing: () => ipcRenderer.invoke(IpcChannels.workspaceRemoveMissing)
   },
 
   agents: {
@@ -116,7 +118,8 @@ const api: AgentDockApi = {
   settings: {
     get: () => ipcRenderer.invoke(IpcChannels.settingsGet),
     update: (patch) => ipcRenderer.invoke(IpcChannels.settingsUpdate, patch),
-    getDiagnostics: () => ipcRenderer.invoke(IpcChannels.settingsDiagnostics)
+    getDiagnostics: () => ipcRenderer.invoke(IpcChannels.settingsDiagnostics),
+    resetAgentDetection: () => ipcRenderer.invoke(IpcChannels.settingsResetAgentDetection)
   },
 
   terminal: {
@@ -157,6 +160,28 @@ const api: AgentDockApi = {
       ipcRenderer.on(IpcChannels.windowMaximizeChange, listener)
       return () => ipcRenderer.removeListener(IpcChannels.windowMaximizeChange, listener)
     }
+  },
+
+  filesystem: {
+    list: (workspaceId, relPath) => ipcRenderer.invoke(IpcChannels.fsList, workspaceId, relPath),
+    read: (workspaceId, relPath) => ipcRenderer.invoke(IpcChannels.fsRead, workspaceId, relPath),
+    checkImportConflicts: (workspaceId, destRelPath, fileNames) =>
+      ipcRenderer.invoke(IpcChannels.fsCheckImportConflicts, workspaceId, destRelPath, fileNames),
+    browseImportFiles: () => ipcRenderer.invoke(IpcChannels.fsBrowseImportFiles),
+    importFiles: (workspaceId, destRelPath, files) => ipcRenderer.invoke(IpcChannels.fsImportFiles, workspaceId, destRelPath, files),
+    importFileAutoRename: (workspaceId, destRelPath, sourcePath) =>
+      ipcRenderer.invoke(IpcChannels.fsImportFileAutoRename, workspaceId, destRelPath, sourcePath),
+    importFromDataUrl: (workspaceId, destRelPath, fileName, dataUrl) =>
+      ipcRenderer.invoke(IpcChannels.fsImportFromDataUrl, workspaceId, destRelPath, fileName, dataUrl),
+    watch: (workspaceId, relPath) => ipcRenderer.invoke(IpcChannels.fsWatch, workspaceId, relPath),
+    unwatch: (workspaceId, relPath) => ipcRenderer.invoke(IpcChannels.fsUnwatch, workspaceId, relPath),
+    onChanged: (cb) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: { workspaceId: string; relPath: string }): void => cb(payload)
+      ipcRenderer.on(IpcChannels.fsChanged, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.fsChanged, listener)
+    },
+    showContextMenu: (workspaceId, relPath, isDirectory) =>
+      ipcRenderer.invoke(IpcChannels.fsShowContextMenu, workspaceId, relPath, isDirectory)
   }
 }
 
