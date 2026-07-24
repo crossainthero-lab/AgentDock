@@ -1,4 +1,4 @@
-import type { BrowserWindow } from 'electron'
+import { ipcMain, type BrowserWindow } from 'electron'
 import { safeHandle } from './ipc-utils'
 import { IpcChannels } from '@shared/ipc-channels'
 import { workspaceService } from '../services/workspace-service'
