@@ -2,11 +2,14 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px;
+  padding: 4px 9px;
   font-size: 12px;
   color: var(--color-text-secondary);
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  margin: var(--space-1) 0;
+  /* Matches ad-activity-group's negative margin so the live ticker (which
+   * sits at the end of the same timeline) is visually consistent with the
+   * activity rows above it rather than sitting further away. */
+  margin: -3px 0;
 }

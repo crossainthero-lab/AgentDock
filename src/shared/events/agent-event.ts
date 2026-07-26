@@ -44,6 +44,14 @@ export type ActivityDetail =
   | { kind: 'web_search'; query: string }
   | { kind: 'todo_list'; items: Array<{ text: string; completed: boolean }> }
   | { kind: 'reasoning'; text: string }
+  // Catch-all for any tool whose input/output doesn't fit one of the shapes
+  // above — the real, extracted tool input (parsed from the transport's own
+  // arguments) and/or the real output/error text when the transport later
+  // reports it, never a fabricated summary. Used by ClaudeEventMapper for
+  // every Claude Code tool that isn't Bash/file-edit/TodoWrite/WebSearch/MCP
+  // (Read, Glob, Grep, WebFetch, Task, ...), so an unrecognized tool still
+  // renders its real arguments instead of a bare tool name.
+  | { kind: 'generic'; input?: unknown; output?: string; error?: string }
 
 interface AgentEventBase {
   sessionId: string

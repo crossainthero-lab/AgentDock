@@ -57,15 +57,42 @@ describe('ClaudeEventMapper — tool events excluded from assistant text', () =>
     const { events } = feed([
       messageStart,
       { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool_1', name: 'Bash' } } },
-      { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"c' } } },
-      { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: 'md":"ls"}' } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"comman' } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: 'd":"ls"}' } } },
       { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } }
     ])
     expect(events).toEqual([
       { type: 'activity_started', sessionId: SESSION_ID, turnId: TURN_ID, activityId: 'tool_1', label: 'Bash', tool: 'Bash' },
-      { type: 'activity_completed', sessionId: SESSION_ID, turnId: TURN_ID, activityId: 'tool_1', label: 'Bash', tool: 'Bash', status: 'done' }
+      {
+        type: 'activity_completed',
+        sessionId: SESSION_ID,
+        turnId: TURN_ID,
+        activityId: 'tool_1',
+        label: 'Bash',
+        tool: 'Bash',
+        status: 'done',
+        detail: { kind: 'command', command: 'ls', output: undefined }
+      }
     ])
     expect(events.some((e) => e.type === 'assistant_delta' || e.type === 'assistant_completed')).toBe(false)
+  })
+
+  it('accumulates the streamed input_json_delta fragments into the real, parsed tool input for a file-editing tool', () => {
+    const { events } = feed([
+      messageStart,
+      { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool_2', name: 'Edit' } } },
+      {
+        type: 'stream_event',
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"file_path":"/tmp/a.ts","old_st' } }
+      },
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: 'ring":"a","new_string":"b"}' } } },
+      { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } }
+    ])
+    const completed = events.find((e) => e.type === 'activity_completed')
+    expect(completed).toMatchObject({
+      tool: 'Edit',
+      detail: { kind: 'file_change', changes: [{ path: '/tmp/a.ts', kind: 'update' }] }
+    })
   })
 
   it('a thinking block never produces any assistant event', () => {
@@ -175,8 +202,58 @@ describe('ClaudeEventMapper — silent/meta tool suppression', () => {
     ])
     expect(events).toEqual([
       { type: 'activity_started', sessionId: SESSION_ID, turnId: TURN_ID, activityId: 'tu3', label: 'Bash', tool: 'Bash' },
-      { type: 'activity_completed', sessionId: SESSION_ID, turnId: TURN_ID, activityId: 'tu3', label: 'Bash', tool: 'Bash', status: 'done' }
+      {
+        type: 'activity_completed',
+        sessionId: SESSION_ID,
+        turnId: TURN_ID,
+        activityId: 'tu3',
+        label: 'Bash',
+        tool: 'Bash',
+        status: 'done',
+        detail: { kind: 'command', command: '', output: undefined }
+      }
     ])
+  })
+})
+
+describe('ClaudeEventMapper — real tool output arrives via the SDK tool_result echo', () => {
+  it('a user message carrying a tool_result for a known tool_use id updates that activity with the real output', () => {
+    const { events } = feed([
+      messageStart,
+      { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu9', name: 'Bash' } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"command":"echo hi"}' } } },
+      { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } },
+      {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu9', content: 'hi\n', is_error: false }] }
+      }
+    ])
+    const updated = events.find((e) => e.type === 'activity_updated')
+    expect(updated).toEqual({
+      type: 'activity_updated',
+      sessionId: SESSION_ID,
+      turnId: TURN_ID,
+      activityId: 'tu9',
+      detail: { kind: 'command', command: 'echo hi', output: 'hi\n' }
+    })
+  })
+
+  it('a tool_result for a silenced tool (AskUserQuestion) produces no activity_updated', () => {
+    const { events } = feed([
+      messageStart,
+      { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu10', name: 'AskUserQuestion' } } },
+      { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } },
+      {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu10', content: 'ignored' }] }
+      }
+    ])
+    expect(events.some((e) => e.type === 'activity_updated')).toBe(false)
+  })
+
+  it('a plain user prompt message (string content, no tool_result) produces no events', () => {
+    const { events } = feed([{ type: 'user', message: { role: 'user', content: 'hello' } }])
+    expect(events).toEqual([])
   })
 })
 

@@ -45,7 +45,62 @@ export function ActivityDetailCard({ detail, workspaceId }: ActivityDetailCardPr
           <MarkdownMessage text={detail.text} workspaceId={workspaceId} />
         </div>
       )
+    case 'generic':
+      return <GenericDetail detail={detail} />
   }
+}
+
+const NOTABLE_INPUT_KEYS = ['file_path', 'path', 'notebook_path', 'pattern', 'query', 'url', 'command', 'description', 'prompt', 'bash_id']
+
+/** Fallback for any tool whose input/output doesn't match one of the
+ *  specialized kinds above — shows the real, extracted arguments (a few
+ *  well-known field names surfaced prominently, the full input always
+ *  available underneath) plus real output/error text, when there is any.
+ *  Only renders the "no details" fallback when the event genuinely carried
+ *  nothing — never in place of real data. */
+function GenericDetail({ detail }: { detail: Extract<ActivityDetail, { kind: 'generic' }> }): React.JSX.Element {
+  const { input, output, error } = detail
+  const inputObj = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined
+  const notable = inputObj ? NOTABLE_INPUT_KEYS.filter((k) => inputObj[k] != null && typeof inputObj[k] !== 'object') : []
+  const hasInput = input !== undefined && !(inputObj && Object.keys(inputObj).length === 0)
+
+  if (!hasInput && !output && !error) {
+    return <div className="ad-activity-detail ad-activity-detail--inline">No additional details available for this action.</div>
+  }
+
+  return (
+    <div className="ad-activity-detail ad-activity-detail--generic">
+      {notable.length > 0 && (
+        <div className="ad-activity-detail__fields">
+          {notable.map((k) => (
+            <div key={k} className="ad-activity-detail__field">
+              <span className="ad-activity-detail__field-label">{k}</span>
+              <span className="ad-activity-detail__field-value">{String(inputObj![k])}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {hasInput && (
+        <div className="ad-terminal-block">
+          <div className="ad-terminal-block__header">
+            <span className="ad-terminal-block__label">Input</span>
+            <CopyButton text={safeJson(input)} label="Copy" />
+          </div>
+          <pre className="ad-terminal-block__body">{safeJson(input)}</pre>
+        </div>
+      )}
+      {output && (
+        <div className="ad-terminal-block">
+          <div className="ad-terminal-block__header">
+            <span className="ad-terminal-block__label">Output</span>
+            <CopyButton text={output} label="Copy" />
+          </div>
+          <pre className="ad-terminal-block__body">{stripAnsi(output)}</pre>
+        </div>
+      )}
+      {error && <div className="ad-activity-detail__mcp-error">{error}</div>}
+    </div>
+  )
 }
 
 function CommandDetail({ detail }: { detail: Extract<ActivityDetail, { kind: 'command' }> }): React.JSX.Element {
