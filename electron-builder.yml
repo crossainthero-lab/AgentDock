@@ -11,6 +11,24 @@ asarUnpack:
   - '**/*.node'
   - 'node_modules/node-pty/build/Release/**'
   - 'node_modules/node-pty/prebuilds/**'
+  # @openai/codex-sdk resolves its own bundled native Codex runtime from a
+  # per-platform optional dependency (e.g. @openai/codex-win32-x64 on
+  # Windows — see codex-runtime-resolver.ts's module comment) whose
+  # `vendor/<target-triple>/bin/` directory ships real native executables
+  # (codex.exe, codex-code-mode-host.exe, rg.exe, ...) that must be spawned
+  # directly. A file trapped inside app.asar can never be launched that way
+  # (Windows/macOS/Linux process-creation APIs all require a real file on
+  # disk) — this unpacks it into the sibling app.asar.unpacked directory
+  # instead. The `**/` prefix matches regardless of exactly how deep
+  # electron-builder's own dependency walker nests the optional package
+  # (confirmed empirically: it can land either hoisted at
+  # node_modules/@openai/codex-win32-x64 or nested under
+  # node_modules/@openai/codex/node_modules/@openai/codex-win32-x64,
+  # depending on the install) — never a hardcoded developer-machine path.
+  # Covers every platform @openai/codex declares an optional native package
+  # for (win32/darwin/linux, x64/arm64) so a future mac/linux packaged build
+  # gets the same fix without needing this file touched again.
+  - '**/@openai/codex-*-*/**'
 win:
   target:
     - target: nsis

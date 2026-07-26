@@ -10,6 +10,10 @@ export interface AgentRunContext {
   /** From Settings → Agents — one of this agent's own AgentCapabilities.permissionModes ids. */
   permissionMode: string
   executablePath: string
+  /** How `executablePath` was resolved — Codex only (see AgentDetection's
+   *  own doc comment for the exact meaning of each value). Undefined for
+   *  every other adapter, which ignores this field entirely. */
+  executablePathSource?: 'custom' | 'sdk-bundled' | 'standalone'
   /** From Settings → Agents — one of this agent's own AgentCapabilities.models
    *  ids, or null to use the agent's own configured default. Read fresh at
    *  handle-construction time (see session-service.sendPrompt), which is

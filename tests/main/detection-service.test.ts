@@ -140,3 +140,75 @@ describe('detectionService.testExecutable', () => {
     expect(spawnCalls).toEqual([{ command: 'codex', args: ['--version'] }])
   })
 })
+
+// Confirms detectionService.detect/detectAll actually wire 'codex' through
+// codex-runtime-resolver.ts (never the generic PATH-search detectOne used
+// for claude-code/antigravity) — the real fix for the Windows codex.cmd
+// launch bug. Deliberately exercises the REAL, installed
+// @openai/codex-win32-x64 dependency's vendor path (this repo genuinely
+// has it installed — see codex-runtime-resolver.test.ts's own "no mocking"
+// test for the same real-package assertion) with only the final --version
+// subprocess mocked via the same cross-spawn mock every other test in this
+// file already uses, so this is a true end-to-end wiring test, not a
+// re-test of resolveCodexRuntime's own logic (already covered in depth by
+// codex-runtime-resolver.test.ts).
+describe('detectionService.detect / detectAll — codex uses the runtime resolver, not PATH search', () => {
+  let originalEnv: NodeJS.ProcessEnv
+  let isolatedDir: string
+
+  beforeEach(() => {
+    spawnCalls.length = 0
+    nextChild = null
+    originalEnv = { ...process.env }
+    // codex-runtime-resolver's tier-3 standalone fallback reads real
+    // LOCALAPPDATA/USERPROFILE env vars — pointed at an empty temp dir here
+    // so a real Codex install that happens to exist on whichever machine
+    // runs this suite can never be found, keeping the "nothing resolves"
+    // case below fully deterministic (never depends on this machine's
+    // actual filesystem/username, per this fix's own test requirement).
+    isolatedDir = mkdtempSync(join(tmpdir(), 'agentdock-detect-codex-isolated-'))
+    process.env.LOCALAPPDATA = join(isolatedDir, 'AppData', 'Local')
+    process.env.USERPROFILE = join(isolatedDir, 'Profile')
+  })
+
+  afterEach(() => {
+    rmSync(isolatedDir, { recursive: true, force: true })
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) delete process.env[key]
+    }
+    Object.assign(process.env, originalEnv)
+  })
+
+  it('reports installed:true with resolutionSource "sdk-bundled" when the bundled runtime responds to --version', async () => {
+    const resultPromise = detectionService.detect('codex', null)
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    nextChild!.stdout.emit('data', 'codex-cli 0.144.5\n')
+    nextChild!.emit('exit', 0)
+
+    const result = await resultPromise
+    expect(result.installed).toBe(true)
+    expect(result.resolutionSource).toBe('sdk-bundled')
+    expect(result.executablePath).toMatch(/codex(\.exe)?$/i)
+    expect(result.version).toBe('codex-cli 0.144.5')
+    expect(result.error).toBeNull()
+  })
+
+  it('reports installed:false with a clear error when the bundled runtime exists but never responds and no standalone install is found', async () => {
+    const resultPromise = detectionService.detect('codex', null)
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    nextChild!.emit('exit', 1)
+
+    const result = await resultPromise
+    expect(result.installed).toBe(false)
+    expect(result.resolutionSource).toBeUndefined()
+    expect(result.executablePath).toBeNull()
+    expect(result.error).toMatch(/could not locate|reinstall/i)
+    // Only the one bundled-runtime probe ran — the (empty, isolated)
+    // standalone candidates never existed on disk, so no second spawn.
+    expect(spawnCalls).toHaveLength(1)
+  })
+})

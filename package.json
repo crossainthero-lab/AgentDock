@@ -1,6 +1,6 @@
 {
   "name": "agentdock",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A simple desktop interface for running Claude Code, Codex, and Antigravity coding agents on your local projects.",
   "main": "./out/main/index.js",
   "author": "AgentDock",

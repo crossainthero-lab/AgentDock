@@ -94,6 +94,52 @@ export function AdvancedSettings(): React.JSX.Element {
       </div>
 
       <div className="ad-advanced-diagnostics">
+        <div className="ad-settings-field__label">Codex runtime</div>
+        {!diagnostics ? (
+          <Spinner size={14} />
+        ) : (
+          <dl className="ad-diagnostics-grid">
+            <dt>Resolution source</dt>
+            <dd>{diagnostics.codex.resolutionSource}</dd>
+            <dt>codexPathOverride used</dt>
+            <dd>{diagnostics.codex.codexPathOverrideUsed ? 'yes' : 'no'}</dd>
+            <dt>Native executable</dt>
+            <dd className="ad-diagnostics-grid__path">{diagnostics.codex.nativeExecutablePath ?? '(none)'}</dd>
+            <dt>Executable exists</dt>
+            <dd>{diagnostics.codex.executableExists ? 'yes' : 'no'}</dd>
+            <dt>--version probe</dt>
+            <dd>
+              {diagnostics.codex.versionProbe
+                ? diagnostics.codex.versionProbe.ok
+                  ? `ok — ${diagnostics.codex.versionProbe.output?.trim() || '(no output)'}`
+                  : `failed — ${diagnostics.codex.versionProbe.reason ?? 'unknown reason'}`
+                : '(not run)'}
+            </dd>
+            <dt>Mode</dt>
+            <dd>{diagnostics.codex.packaged ? 'packaged' : 'development'}</dd>
+            <dt>Resources path</dt>
+            <dd className="ad-diagnostics-grid__path">{diagnostics.codex.resourcesPath}</dd>
+            <dt>Inside app.asar</dt>
+            <dd>{diagnostics.codex.insideAsar === null ? 'n/a' : diagnostics.codex.insideAsar ? 'yes' : 'no'}</dd>
+            {diagnostics.codex.rejectedShimPaths.length > 0 && (
+              <>
+                <dt>Rejected shim paths</dt>
+                <dd className="ad-diagnostics-grid__path">{diagnostics.codex.rejectedShimPaths.join(', ')}</dd>
+              </>
+            )}
+            {diagnostics.codex.error && (
+              <>
+                <dt>Error</dt>
+                <dd>{diagnostics.codex.error}</dd>
+              </>
+            )}
+            <dt>Effective PATH</dt>
+            <dd className="ad-diagnostics-grid__path">{diagnostics.codex.effectivePath.join(', ')}</dd>
+          </dl>
+        )}
+      </div>
+
+      <div className="ad-advanced-diagnostics">
         <div className="ad-settings-field__label">Reset stale configuration</div>
         <p className="ad-advanced-note">
           If AgentDock's settings were copied from another computer (or an agent that used to work now fails to launch), these

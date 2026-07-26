@@ -1,5 +1,20 @@
 # Changelog
 
+## AgentDock v0.1.2 — Windows Codex Launch Fix
+
+This release fixes a Windows issue where AgentDock could detect the npm `codex.cmd` shim and incorrectly pass it to the Codex SDK as a native executable.
+
+### Fixed
+
+- Codex sessions no longer fail when `codex` resolves to an npm `.cmd` shim.
+- AgentDock now allows the Codex SDK to use its bundled native Windows runtime by default.
+- Added native standalone Codex executable fallback detection.
+- Improved custom Codex path validation.
+- Improved packaged-runtime diagnostics.
+- Added Windows resolver and packaging regression tests.
+
+Users affected by the Windows Codex startup error should install v0.1.2.
+
 ## AgentDock v0.1.1 — Windows
 
 AgentDock v0.1.1 is a major usability and Windows portability improvement.

@@ -67,6 +67,7 @@ class CodexRunHandle implements AgentRunHandle {
       const transport = new CodexAgentSdkTransport({
         cwd: this.ctx.workspacePath,
         executablePath: this.ctx.executablePath,
+        executablePathSource: this.ctx.executablePathSource,
         permissionMode: this.ctx.permissionMode,
         nativeThreadId: this.ctx.nativeSessionId,
         model: this.currentModel,

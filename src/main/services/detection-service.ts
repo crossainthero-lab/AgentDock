@@ -1,23 +1,7 @@
-// Not node:child_process's execFile with shell:true — that combination is
-// exactly what Node's own DEP0190 deprecation warns about ("arguments are
-// not escaped, only concatenated"), and the previous version of this file
-// used it specifically to let a Windows `.cmd`/`.bat` candidate run at all.
-// cross-spawn achieves the same "a .cmd/.bat shim actually runs" goal
-// without that unsafe-concatenation risk (a candidate path containing a
-// space, parenthesis, or other shell metacharacter is passed through as one
-// literal argument, never re-parsed as shell syntax) — same fix already
-// applied to vscode-launcher-service.ts, codex-model-catalog-service.ts,
-// and ClaudeAgentSdkTransport.ts.
-import spawn from 'cross-spawn'
 import type { AgentDetection, AgentId } from '@shared/types'
-import {
-  describeResolutionFailure,
-  knownInstallDirs,
-  resolveExecutable,
-  type ValidateCandidate,
-  type ValidationOutcome
-} from './executable-resolver'
-import { validateSpawnPlan } from './spawn-guard'
+import { describeResolutionFailure, knownInstallDirs, resolveExecutable, type ValidateCandidate } from './executable-resolver'
+import { probeExecutable } from './executable-probe'
+import { resolveCodexRuntime } from './codex-runtime-resolver'
 
 interface DetectionSpec {
   agentId: AgentId
@@ -38,6 +22,17 @@ const SPECS: DetectionSpec[] = [
     structuredOutput: true
   },
   {
+    // Kept for resolveCommand/structuredOutputFor/testExecutable (see their
+    // own doc comments below) — but `codex` never goes through this spec's
+    // `candidates`-based PATH search for actual detection. A bare `codex`
+    // command on Windows commonly resolves to an npm `codex.cmd` shim that
+    // the generic PATH-search-then-probe flow below would happily accept
+    // (cross-spawn's probe CAN run a `.cmd` via cmd.exe), but
+    // @openai/codex-sdk's own internal spawn call cannot launch one
+    // directly — see codex-runtime-resolver.ts's module comment for the
+    // full fix. `detect()`/`detectAll()` special-case 'codex' to call
+    // `detectCodex()` instead, which never treats a shim as usable at any
+    // priority tier and never even searches PATH for a global install.
     agentId: 'codex',
     candidates: ['codex'],
     versionArgs: ['--version'],
@@ -57,71 +52,14 @@ const SPECS: DetectionSpec[] = [
   }
 ]
 
-const PROBE_TIMEOUT_MS = 5000
-
-/** Runs a real subprocess probe against a candidate path — this is what
- *  actually proves a resolved path is a working executable, not just a
- *  file that happens to exist with the right name (see
- *  executable-resolver.ts's module comment for the exact bug this
- *  prevents: an existsSync-only check previously accepted a POSIX shell
- *  shim that Windows cannot execute). cross-spawn correctly launches a
- *  native .exe, an npm .cmd shim, or a .bat file uniformly on Windows
- *  (routing a shim through cmd.exe only when actually needed, with args
- *  safely escaped) and runs a real executable directly (no shell at all)
- *  everywhere else — so spaces, quotes, or Unicode in the path/args are
- *  handled correctly by construction on every platform, with no risk of a
- *  path being silently split into multiple words the way naive
- *  `shell: true` + an args array is (see spawn-guard.ts/DEP0190). */
-function probeCandidate(executable: string, args: string[]): Promise<ValidationOutcome> {
-  try {
-    validateSpawnPlan({ command: executable, args })
-  } catch (err) {
-    return Promise.resolve({ ok: false, reason: err instanceof Error ? err.message : String(err) })
-  }
-
-  return new Promise((resolve) => {
-    let settled = false
-    let stdout = ''
-    let stderr = ''
-
-    const child = spawn(executable, args, { windowsHide: true })
-
-    const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      child.kill()
-      resolve({ ok: false, reason: `timed out after ${PROBE_TIMEOUT_MS}ms` })
-    }, PROBE_TIMEOUT_MS)
-
-    child.stdout?.setEncoding('utf8')
-    child.stdout?.on('data', (chunk: string) => {
-      stdout += chunk
-    })
-    child.stderr?.setEncoding('utf8')
-    child.stderr?.on('data', (chunk: string) => {
-      stderr += chunk
-    })
-
-    child.once('error', (err) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      const code = (err as NodeJS.ErrnoException).code
-      resolve({ ok: false, reason: code ? `${code}: ${err.message}` : err.message })
-    })
-
-    child.once('exit', (code) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (code === 0) resolve({ ok: true, output: stdout || stderr })
-      else resolve({ ok: false, reason: `exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ''}` })
-    })
-  })
+function specFor(agentId: AgentId): DetectionSpec {
+  const spec = SPECS.find((s) => s.agentId === agentId)
+  if (!spec) throw new Error(`Unknown agent id: ${agentId}`)
+  return spec
 }
 
 function makeValidator(spec: DetectionSpec): ValidateCandidate {
-  return (path) => probeCandidate(path, spec.versionArgs)
+  return (path) => probeExecutable(path, spec.versionArgs)
 }
 
 function executableType(path: string): string {
@@ -135,6 +73,8 @@ function executableType(path: string): string {
   return 'unknown'
 }
 
+/** The generic PATH-search-then-probe detection every agent except Codex
+ *  uses — unchanged from before this fix. */
 async function detectOne(spec: DetectionSpec, customPath: string | null): Promise<AgentDetection> {
   const resolution = await resolveExecutable(spec.candidates, customPath, makeValidator(spec), knownInstallDirs())
 
@@ -179,34 +119,72 @@ async function detectOne(spec: DetectionSpec, customPath: string | null): Promis
   }
 }
 
+/** Codex-specific detection — delegates entirely to
+ *  codex-runtime-resolver.ts's 4-tier priority (custom .exe > SDK-bundled
+ *  native runtime > standalone .exe > error) instead of the generic
+ *  PATH-search above, so a `codex.cmd` shim on PATH is never reported as a
+ *  working install the way the generic path would. `resolutionSource` on
+ *  the returned AgentDetection is what session-service.ts threads through
+ *  to CodexAgentSdkTransport so it knows whether to pass
+ *  `codexPathOverride` at all (see AgentRunContext.executablePathSource's
+ *  doc comment). */
+async function detectCodex(customPath: string | null): Promise<AgentDetection> {
+  const spec = specFor('codex')
+  const resolution = await resolveCodexRuntime(customPath)
+
+  if (resolution.source === 'none' || !resolution.nativeExecutablePath) {
+    console.error(`[detection] codex: ${resolution.error}`)
+    return {
+      agentId: 'codex',
+      installed: false,
+      version: null,
+      executablePath: null,
+      error: resolution.error ?? 'Codex could not be located.',
+      structuredOutput: spec.structuredOutput
+    }
+  }
+
+  console.log(`[detection] codex resolved to: ${resolution.nativeExecutablePath} (source: ${resolution.source})`)
+
+  return {
+    agentId: 'codex',
+    installed: true,
+    version: resolution.versionProbe?.output ? spec.parseVersion(resolution.versionProbe.output) : null,
+    executablePath: resolution.nativeExecutablePath,
+    error: null,
+    structuredOutput: spec.structuredOutput,
+    resolutionSource: resolution.source
+  }
+}
+
 export const detectionService = {
   async detect(agentId: AgentId, customPath: string | null): Promise<AgentDetection> {
-    const spec = SPECS.find((s) => s.agentId === agentId)
-    if (!spec) throw new Error(`Unknown agent id: ${agentId}`)
-    return detectOne(spec, customPath)
+    if (agentId === 'codex') return detectCodex(customPath)
+    return detectOne(specFor(agentId), customPath)
   },
 
   async detectAll(customPaths: Partial<Record<AgentId, string | null>>): Promise<AgentDetection[]> {
-    return Promise.all(SPECS.map((spec) => detectOne(spec, customPaths[spec.agentId] ?? null)))
+    return Promise.all(SPECS.map((spec) => this.detect(spec.agentId, customPaths[spec.agentId] ?? null)))
   },
 
   resolveCommand(agentId: AgentId): string {
-    const spec = SPECS.find((s) => s.agentId === agentId)
-    if (!spec) throw new Error(`Unknown agent id: ${agentId}`)
-    return spec.candidates[0]
+    return specFor(agentId).candidates[0]
   },
 
   structuredOutputFor(agentId: AgentId): boolean {
-    const spec = SPECS.find((s) => s.agentId === agentId)
-    if (!spec) throw new Error(`Unknown agent id: ${agentId}`)
-    return spec.structuredOutput
+    return specFor(agentId).structuredOutput
   },
 
   /** Explicit "Test" action for the Settings UI: validates one specific
    *  path (not a PATH search) and returns full diagnostics — resolved
    *  path, executable type, version, and raw probe output/error. Used so
    *  a user can confirm a custom override actually works before saving it
-   *  as their configured path. */
+   *  as their configured path. Deliberately agent-agnostic and unchanged by
+   *  this fix (a plain "does this path respond to --version" diagnostic is
+   *  still an honest, useful answer even for a `.cmd` — the actual gate
+   *  that rejects a `.cmd` for Codex specifically is the save-time
+   *  validation in ipc/agent.ts's agentsSetCustomPath handler, not this
+   *  read-only probe). */
   async testExecutable(agentId: AgentId, path: string): Promise<{
     path: string
     type: string
@@ -215,9 +193,8 @@ export const detectionService = {
     output: string | null
     error: string | null
   }> {
-    const spec = SPECS.find((s) => s.agentId === agentId)
-    if (!spec) throw new Error(`Unknown agent id: ${agentId}`)
-    const probe = await probeCandidate(path, spec.versionArgs)
+    const spec = specFor(agentId)
+    const probe = await probeExecutable(path, spec.versionArgs)
     return {
       path,
       type: executableType(path),

@@ -125,12 +125,20 @@ vi.mock('../../src/main/services/codex-response-image-service', () => ({
 
 import { codexAdapter } from '../../src/main/agents/codex/CodexAdapter'
 
+// `executablePathSource: 'custom'` mirrors a user-configured custom path —
+// the one case (besides 'standalone') where AgentDock is expected to pass
+// codexPathOverride to the SDK at all (see the "constructs the SDK Codex
+// client" test below, and CodexAgentSdkTransport.ts's own doc comment for
+// the full 'custom' | 'sdk-bundled' | 'standalone' | undefined contract).
+// Every other test in this file only cares about thread/turn behavior, not
+// this specific field, so sharing one base ctx across them all is safe.
 const ctx: AgentRunContext = {
   session: { id: 's1', workspaceId: 'w1', agentId: 'codex', title: 't', status: 'idle', createdAt: '', updatedAt: '' },
   workspacePath: '/tmp/project',
   nativeSessionId: null,
   permissionMode: 'default',
   executablePath: 'codex',
+  executablePathSource: 'custom',
   model: null,
   reasoningEffort: null
 }
@@ -146,13 +154,70 @@ describe('codexAdapter', () => {
     diffNewImagesMock.mockClear().mockResolvedValue([])
   })
 
-  it('constructs the SDK Codex client with the resolved executable path', async () => {
+  it('constructs the SDK Codex client with codexPathOverride when the path came from an explicit custom setting', async () => {
     const handle = codexAdapter.start(ctx)
     handle.send('do the thing', 't1')
     await flushMicrotasks()
 
     expect(codexInstances).toHaveLength(1)
     expect(codexInstances[0].options).toMatchObject({ codexPathOverride: 'codex' })
+  })
+
+  // The actual fix for the Windows codex.cmd launch bug is that
+  // `executablePath` is NEVER a PATH-resolved `codex.cmd` shim by the time
+  // it reaches here — codex-runtime-resolver.ts guarantees that for every
+  // source, including the default 'sdk-bundled' case. codexPathOverride IS
+  // still passed for 'sdk-bundled' (verified against a real packaged
+  // build necessary — see CodexAgentSdkTransport.ts's module comment for
+  // why letting the SDK self-resolve internally turned out to be broken
+  // inside a packaged Electron app), but always with a real, verified
+  // native executable path, never a shim.
+  it('constructs the SDK Codex client with codexPathOverride even when executablePathSource is sdk-bundled (the default, no custom path configured) — always a verified real path, never a shim', async () => {
+    const bundledCtx: AgentRunContext = {
+      ...ctx,
+      executablePath: 'C:\\resolved\\vendor\\bin\\codex.exe',
+      executablePathSource: 'sdk-bundled'
+    }
+    const handle = codexAdapter.start(bundledCtx)
+    handle.send('do the thing', 't1')
+    await flushMicrotasks()
+
+    expect(codexInstances).toHaveLength(1)
+    expect(codexInstances[0].options).toEqual({ codexPathOverride: 'C:\\resolved\\vendor\\bin\\codex.exe' })
+  })
+
+  it('constructs the SDK Codex client with codexPathOverride when executablePathSource is absent — same as sdk-bundled, the safe default', async () => {
+    const bareCtx: AgentRunContext = {
+      session: ctx.session,
+      workspacePath: ctx.workspacePath,
+      nativeSessionId: ctx.nativeSessionId,
+      permissionMode: ctx.permissionMode,
+      executablePath: ctx.executablePath,
+      model: ctx.model,
+      reasoningEffort: ctx.reasoningEffort
+    }
+    const handle = codexAdapter.start(bareCtx)
+    handle.send('do the thing', 't1')
+    await flushMicrotasks()
+
+    expect(codexInstances).toHaveLength(1)
+    expect(codexInstances[0].options).toEqual({ codexPathOverride: ctx.executablePath })
+  })
+
+  it('constructs the SDK Codex client with codexPathOverride when the path came from the standalone-executable fallback', async () => {
+    const standaloneCtx: AgentRunContext = {
+      ...ctx,
+      executablePath: 'C:\\Users\\test\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe',
+      executablePathSource: 'standalone'
+    }
+    const handle = codexAdapter.start(standaloneCtx)
+    handle.send('do the thing', 't1')
+    await flushMicrotasks()
+
+    expect(codexInstances).toHaveLength(1)
+    expect(codexInstances[0].options).toMatchObject({
+      codexPathOverride: 'C:\\Users\\test\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe'
+    })
   })
 
   it('starts a fresh thread with the workspace cwd and never-ask approval policy (no human present in exec/JSON mode)', async () => {
