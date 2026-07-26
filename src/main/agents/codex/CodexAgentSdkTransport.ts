@@ -39,15 +39,48 @@ function loadSdk(): Promise<CodexSdkModule> {
 // install (the normal shape produced by e.g. `npm install -g`, as opposed
 // to a native .exe from Codex's own Windows installer) handed to it as
 // `codexPathOverride` fails with `spawn <path> EINVAL` the moment a
-// session actually starts. Since `codexPathOverride` only accepts a single
-// path (no separate args array we control), the fix has to happen before
-// the SDK is ever constructed: resolve the shim to the real target it
-// ultimately runs and use THAT as the override instead. If the shim can't
-// be resolved to a single directly-executable target (e.g. it turns out to
-// require a `node <script>.js` invocation, which doesn't fit
-// `codexPathOverride`'s single-path contract), this fails loudly with a
-// clear, actionable error rather than silently handing the SDK something
-// already known not to work.
+// session actually starts.
+//
+// The real fix (see codex-runtime-resolver.ts's module comment for the
+// full priority order) is upstream of this file: `this.opts.executablePath`
+// is now ALWAYS a verified, real, directly-spawnable native executable —
+// never a PATH-resolved `codex.cmd` shim — regardless of which tier
+// resolved it (a user-configured custom path, the Codex SDK's own bundled
+// runtime, or an official standalone install).
+//
+// codexPathOverride is deliberately ALWAYS passed now, even for the
+// default 'sdk-bundled' case. An earlier version of this fix tried to
+// leave codexPathOverride unset for 'sdk-bundled' specifically, letting
+// `new Codex({})` resolve its own bundled runtime internally — the
+// natural reading of "don't force an override when nothing was
+// explicitly configured." That approach was verified against a REAL
+// packaged build and found to be broken: the SDK's own internal
+// `findCodexPath()` does the exact same `require.resolve()`-based vendor
+// lookup this file's resolver mirrors, and inside a packaged Electron app
+// that lookup returns a path that LOOKS like it exists (Electron patches
+// `fs.existsSync`/`statSync` to transparently redirect reads of an
+// asar-unpacked file) but cannot actually be spawned directly — raw
+// `child_process.spawn`/Windows `CreateProcess` bypass Electron's patched
+// fs layer entirely and need the real `app.asar.unpacked` path.
+// codex-runtime-resolver.ts's `resolveSdkBundledExecutablePath` already
+// converts that logical path to its real unpacked equivalent (see its own
+// `toRealUnpackedPath` doc comment) — but the SDK's OWN internal
+// resolution has no equivalent fix and never will, since AgentDock can't
+// patch third-party compiled code. Passing our own already-corrected path
+// as `codexPathOverride` is the only way to actually get a packaged
+// session to launch. The one thing this trades away is the SDK's own
+// `pathDirs` behavior (prepending its bundled ripgrep directory onto the
+// child's PATH when it self-resolves) — a minor capability loss, not a
+// launch failure, and the child still inherits AgentDock's own full
+// environment either way (see `CodexOptions.env`'s own default-to-inherit
+// behavior in the SDK's compiled source).
+//
+// `resolveCodexExecutablePath` below is kept as a last-resort defense: if
+// `executablePath` somehow still turns out to be a `.cmd`/`.bat` shim
+// (e.g. a pre-fix saved custom path that hasn't been re-validated yet),
+// this still tries to resolve it to a directly-executable target rather
+// than handing the SDK something already known not to work, and fails
+// loudly with a clear, actionable error if it can't.
 function resolveCodexExecutablePath(executablePath: string): string {
   if (!isWindowsShim(executablePath)) return executablePath
   const target = resolveShimTarget(executablePath)
@@ -70,6 +103,15 @@ function resolveCodexExecutablePath(executablePath: string): string {
 export interface CodexAgentSdkTransportOptions {
   cwd: string
   executablePath: string
+  /** How `executablePath` was resolved (see AgentRunContext's own doc
+   *  comment) — carried through for diagnostics/logging only. Every
+   *  source ('custom', 'sdk-bundled', 'standalone') results in
+   *  `codexPathOverride` being passed to the SDK (see this file's module
+   *  comment for exactly why 'sdk-bundled' isn't special-cased to omit
+   *  it): by construction, `executablePath` is always a verified, real,
+   *  directly-spawnable native executable by the time it reaches here,
+   *  never a PATH-resolved shim. */
+  executablePathSource?: 'custom' | 'sdk-bundled' | 'standalone'
   /** AgentDock's own codex permissionModes id ('default' | 'read-only' |
    *  'workspace-write' | 'danger-full-access' | 'bypass'). */
   permissionMode: string
@@ -188,6 +230,11 @@ export class CodexAgentSdkTransport {
     try {
       const { Codex } = await loadSdk()
       if (!this.codex) {
+        // Always pass codexPathOverride — see this file's module comment
+        // for exactly why 'sdk-bundled' isn't special-cased to omit it
+        // (verified against a real packaged build: the SDK's own internal
+        // self-resolution has no equivalent to
+        // codex-runtime-resolver.ts's app.asar.unpacked path correction).
         this.codex = new Codex({ codexPathOverride: resolveCodexExecutablePath(this.opts.executablePath) })
       }
       if (!this.thread) {

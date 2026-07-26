@@ -6,6 +6,7 @@ import { settingsService } from '../services/settings-service'
 import { getAdapter } from '../agents/adapter-registry'
 import { AGENT_IDS, AGENT_DISPLAY_NAMES } from '@shared/types'
 import { normalizeExecutableOverride } from '../services/spawn-guard'
+import { validateCodexCustomPath } from '../services/codex-runtime-resolver'
 
 export function registerAgentIpc(window: BrowserWindow): void {
   ipcMain.handle(IpcChannels.agentsList, async () => {
@@ -32,6 +33,32 @@ export function registerAgentIpc(window: BrowserWindow): void {
     if (customPath === null) {
       settingsService.update({ agents: { [agentId]: { customPath: null } } })
       return detectionService.detect(agentId, null)
+    }
+
+    // Codex gets its own, stricter validation (requirement: exists, is a
+    // regular file, ends in .exe, isn't a .cmd/.bat/.ps1/.js/.mjs shim,
+    // isn't trapped inside app.asar, and actually responds to --version) —
+    // a Windows shim that the generic normalizeExecutableOverride below
+    // would happily accept (it only checks existence/is-a-file) can never
+    // be launched by @openai/codex-sdk's raw spawn call, so it must be
+    // rejected here with a clear Settings message before it's ever saved,
+    // not discovered later when a session fails to start. Every other
+    // agent (Claude, Antigravity) keeps today's generic validation
+    // unchanged.
+    if (agentId === 'codex') {
+      const validated = await validateCodexCustomPath(customPath)
+      if (!validated.ok || !validated.path) {
+        return {
+          agentId,
+          installed: false,
+          version: null,
+          executablePath: null,
+          error: validated.error ?? 'Invalid custom Codex path.',
+          structuredOutput: detectionService.structuredOutputFor(agentId)
+        }
+      }
+      settingsService.update({ agents: { codex: { customPath: validated.path } } })
+      return detectionService.detect('codex', validated.path)
     }
 
     const normalized = normalizeExecutableOverride(customPath)

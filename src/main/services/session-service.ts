@@ -180,6 +180,7 @@ export const sessionService = {
         nativeSessionId: sessionRepo.getNativeSessionId(sessionId),
         permissionMode: agentSettings.permissionMode,
         executablePath: detection.executablePath,
+        executablePathSource: detection.resolutionSource,
         model: agentSettings.model,
         reasoningEffort: agentSettings.reasoningEffort
       })

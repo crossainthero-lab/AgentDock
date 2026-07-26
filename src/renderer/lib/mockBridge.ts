@@ -381,14 +381,27 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       async getDiagnostics() {
         return {
-          appVersion: '0.1.1 (browser preview)',
+          appVersion: '0.1.2 (browser preview)',
           electronVersion: 'n/a',
           chromeVersion: navigator.userAgent,
           nodeVersion: 'n/a',
           platform: 'browser',
           arch: 'n/a',
           userDataPath: 'n/a (browser preview)',
-          databasePath: 'n/a (browser preview)'
+          databasePath: 'n/a (browser preview)',
+          codex: {
+            resolutionSource: 'none' as const,
+            codexPathOverrideUsed: false,
+            nativeExecutablePath: null,
+            executableExists: false,
+            versionProbe: null,
+            packaged: false,
+            resourcesPath: 'n/a (browser preview)',
+            insideAsar: null,
+            effectivePath: [],
+            rejectedShimPaths: [],
+            error: 'Not available in browser preview.'
+          }
         }
       },
       async resetAgentDetection() {

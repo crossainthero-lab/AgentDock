@@ -21,6 +21,19 @@ export interface AgentDetection {
   error: string | null
   /** Whether this adapter can parse structured events, or only forwards raw terminal output. */
   structuredOutput: boolean
+  /** Which strategy produced `executablePath` — Codex only today (see
+   *  codex-runtime-resolver.ts). 'custom' means a user-configured path;
+   *  'sdk-bundled' means the Codex SDK's own bundled native runtime
+   *  (resolved by AgentDock itself, not the SDK's own internal lookup —
+   *  see CodexAgentSdkTransport.ts's module comment for why that
+   *  distinction matters inside a packaged app); 'standalone' means an
+   *  official standalone Codex install found via
+   *  codex-runtime-resolver.ts's fallback search. Every value results in
+   *  `executablePath` being a verified, real, directly-spawnable native
+   *  executable — never a PATH-resolved shim. Undefined for every other
+   *  agent (Claude, Antigravity), which still use plain PATH-based
+   *  detection. */
+  resolutionSource?: 'custom' | 'sdk-bundled' | 'standalone'
 }
 
 /** Result of the Settings "Test" action — validates one specific candidate
@@ -290,6 +303,31 @@ export interface ImportFileResult {
   error?: string
 }
 
+/** Codex-specific runtime resolution diagnostics — see
+ *  codex-runtime-resolver.ts for the resolution logic this reports on. */
+export interface CodexRuntimeDiagnostics {
+  resolutionSource: 'custom' | 'sdk-bundled' | 'standalone' | 'none'
+  /** True whenever `resolutionSource` isn't 'none' — AgentDock always
+   *  passes `codexPathOverride` to the SDK once it has resolved a real
+   *  native executable, for every source including 'sdk-bundled' (see
+   *  CodexAgentSdkTransport.ts's module comment for why letting the SDK
+   *  resolve its own bundled runtime internally turned out to be unsafe
+   *  inside a packaged app). What the actual fix guarantees is not "no
+   *  override," but that the overridden path is always real and
+   *  verified, never a PATH-resolved shim. */
+  codexPathOverrideUsed: boolean
+  nativeExecutablePath: string | null
+  executableExists: boolean
+  versionProbe: { ok: boolean; output?: string; reason?: string } | null
+  packaged: boolean
+  resourcesPath: string
+  /** null when there's no resolved executable path to check. */
+  insideAsar: boolean | null
+  effectivePath: string[]
+  rejectedShimPaths: string[]
+  error: string | null
+}
+
 export interface Diagnostics {
   appVersion: string
   electronVersion: string
@@ -299,6 +337,7 @@ export interface Diagnostics {
   arch: string
   userDataPath: string
   databasePath: string
+  codex: CodexRuntimeDiagnostics
 }
 
 export interface TerminalExitInfo {

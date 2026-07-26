@@ -183,7 +183,7 @@ export const codexModelCatalogService = {
     try {
       const work = (async () => {
         const initResponse = await client.call('initialize', {
-          clientInfo: { name: 'AgentDock', version: '0.1.1' }
+          clientInfo: { name: 'AgentDock', version: '0.1.2' }
         })
         if (initResponse.error) throw new Error(`initialize failed: ${initResponse.error.message}`)
         const raw = await fetchAllPages(client)
