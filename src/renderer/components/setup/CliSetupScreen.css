@@ -1,0 +1,155 @@
+.ad-cli-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.ad-cli-setup__intro {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.ad-cli-setup__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ad-cli-setup__loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  padding: var(--space-4) 0;
+}
+
+.ad-cli-setup__global-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.ad-cli-setup__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: 13px;
+}
+
+.ad-cli-setup__confirm-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ad-cli-setup__command {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.ad-cli-setup__confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.ad-cli-setup-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+}
+
+.ad-cli-setup-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.ad-cli-setup-card__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ad-cli-setup-card__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.ad-cli-setup-card__path {
+  word-break: break-all;
+}
+
+.ad-cli-setup-card__error {
+  color: var(--color-danger);
+}
+
+.ad-cli-setup-card__ok {
+  color: var(--color-success);
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
+.ad-cli-setup-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ad-cli-setup-card__manual {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.ad-cli-setup-card__manual-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.ad-cli-setup-card__run {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.ad-cli-setup-card__run-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.ad-cli-setup-card__run-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}

@@ -150,6 +150,41 @@ const api: AgentDockApi = {
     execute: (input) => ipcRenderer.invoke(IpcChannels.handoffExecute, input)
   },
 
+  cliSetup: {
+    getStatuses: () => ipcRenderer.invoke(IpcChannels.cliSetupGetStatuses),
+    getPlan: (agentId) => ipcRenderer.invoke(IpcChannels.cliSetupGetPlan, agentId),
+    install: (agentId, installId) => ipcRenderer.invoke(IpcChannels.cliSetupInstall, agentId, installId),
+    cancelInstall: (installId) => ipcRenderer.send(IpcChannels.cliSetupCancelInstall, installId),
+    onInstallProgress: (installId, cb) => {
+      const listener = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof cb>[0]): void => {
+        if (progress.installId === installId) cb(progress)
+      }
+      ipcRenderer.on(IpcChannels.cliSetupInstallProgress, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.cliSetupInstallProgress, listener)
+    },
+    signIn: (agentId) => ipcRenderer.invoke(IpcChannels.cliSetupSignIn, agentId),
+    ptyWrite: (ptyId, data) => ipcRenderer.send(IpcChannels.cliSetupPtyWrite, ptyId, data),
+    ptyResize: (ptyId, cols, rows) => ipcRenderer.send(IpcChannels.cliSetupPtyResize, ptyId, cols, rows),
+    ptyInterrupt: (ptyId) => ipcRenderer.send(IpcChannels.cliSetupPtyInterrupt, ptyId),
+    ptyKill: (ptyId) => ipcRenderer.send(IpcChannels.cliSetupPtyKill, ptyId),
+    onPtyData: (ptyId, cb) => {
+      const listener = (_event: Electron.IpcRendererEvent, envelope: { ptyId: string; data: string }): void => {
+        if (envelope.ptyId === ptyId) cb(envelope.data)
+      }
+      ipcRenderer.on(IpcChannels.cliSetupPtyData, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.cliSetupPtyData, listener)
+    },
+    onPtyExit: (ptyId, cb) => {
+      const listener = (_event: Electron.IpcRendererEvent, envelope: { ptyId: string; info: Parameters<typeof cb>[0] }): void => {
+        if (envelope.ptyId === ptyId) cb(envelope.info)
+      }
+      ipcRenderer.on(IpcChannels.cliSetupPtyExit, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.cliSetupPtyExit, listener)
+    },
+    openTerminal: (agentId, purpose) => ipcRenderer.invoke(IpcChannels.cliSetupOpenTerminal, agentId, purpose),
+    openInstallLogs: () => ipcRenderer.invoke(IpcChannels.cliSetupOpenInstallLogs)
+  },
+
   windowCtl: {
     minimize: () => ipcRenderer.send(IpcChannels.windowMinimize),
     maximize: () => ipcRenderer.send(IpcChannels.windowMaximize),

@@ -13,6 +13,7 @@ import { registerCodexIpc } from './codex'
 import { registerClaudeIpc } from './claude'
 import { registerAntigravityIpc } from './antigravity'
 import { registerFilesystemIpc } from './filesystem'
+import { registerCliSetupIpc } from './cli-setup'
 
 export function registerAllIpc(window: BrowserWindow): void {
   registerWorkspaceIpc(window)
@@ -29,4 +30,5 @@ export function registerAllIpc(window: BrowserWindow): void {
   registerClaudeIpc()
   registerAntigravityIpc(window)
   registerFilesystemIpc(window)
+  registerCliSetupIpc(window)
 }

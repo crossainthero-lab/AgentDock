@@ -97,3 +97,7 @@
   background: var(--color-danger);
   color: #fff;
 }
+
+.ad-titlebar__setup-warning {
+  color: var(--color-warning);
+}

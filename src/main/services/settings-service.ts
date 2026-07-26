@@ -20,6 +20,9 @@ function defaultSettings(): Settings {
     },
     advanced: {
       gitExecutablePath: 'git'
+    },
+    cliSetup: {
+      setupDismissed: false
     }
   }
 }
@@ -29,7 +32,8 @@ function mergeSettings(base: Settings, patch: SettingsPatch): Settings {
     appearance: patch.appearance ?? base.appearance,
     agents: { ...base.agents },
     permissions: { ...base.permissions, ...patch.permissions },
-    advanced: { ...base.advanced, ...patch.advanced }
+    advanced: { ...base.advanced, ...patch.advanced },
+    cliSetup: { ...base.cliSetup, ...patch.cliSetup }
   }
   if (patch.agents) {
     for (const [id, agentPatch] of Object.entries(patch.agents) as [AgentId, Partial<Settings['agents'][AgentId]>][]) {
@@ -40,8 +44,16 @@ function mergeSettings(base: Settings, patch: SettingsPatch): Settings {
 }
 
 export const settingsService = {
+  // Defensively backfills top-level sections added after a user's settings
+  // row was first written (e.g. `cliSetup`, added in a later release) — an
+  // existing stored JSON blob predating that section simply won't have the
+  // key, and accessing `.cliSetup.setupDismissed` on it would throw despite
+  // the type saying it's always present. `defaultSettings()` is only used
+  // outright on a genuinely fresh install (no row at all yet).
   get(): Settings {
-    return settingsRepo.get() ?? defaultSettings()
+    const stored = settingsRepo.get()
+    if (!stored) return defaultSettings()
+    return { ...defaultSettings(), ...stored, cliSetup: { ...defaultSettings().cliSetup, ...stored.cliSetup } }
   },
 
   update(patch: SettingsPatch): Settings {

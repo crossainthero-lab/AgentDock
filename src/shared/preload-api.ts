@@ -8,6 +8,11 @@ import type {
   AttachmentResolveResult,
   AttachmentSaveResult,
   ChangedFile,
+  CliInstallOutcome,
+  CliInstallPlan,
+  CliInstallProgressEvent,
+  CliSetupInfo,
+  CliSignInResult,
   CodexModelCatalogResult,
   CreateSessionInput,
   Diagnostics,
@@ -242,6 +247,50 @@ export interface AgentDockApi {
     interrupt(sessionId: string): void
     onData(sessionId: string, cb: (data: string) => void): Unsubscribe
     onExit(sessionId: string, cb: (info: TerminalExitInfo) => void): Unsubscribe
+  }
+  /** Backs the CLI Setup Assistant (automatic detection screen + Settings →
+   *  Agents → CLI Setup): checks whether each supported agent CLI is
+   *  installed/launchable/authenticated, and — with explicit confirmation
+   *  shown to the user first — runs its official installer or native
+   *  sign-in flow. Never collects, inspects, or stores credentials; every
+   *  spawn goes through the same validated resolver/spawn-guard pipeline
+   *  agent launches use, never a raw shell string. */
+  cliSetup: {
+    /** Runs full CLI detection plus a best-effort, non-interactive auth
+     *  check for every supported agent — the same check used to decide
+     *  whether the full setup screen should appear at all. */
+    getStatuses(): Promise<CliSetupInfo[]>
+    /** Builds (but does not run) the install plan for one agent — the exact
+     *  command AgentDock would run and why, shown to the user before they
+     *  confirm. */
+    getPlan(agentId: AgentId): Promise<CliInstallPlan>
+    /** Runs the plan's install command for one agent. Resolves once the
+     *  install finishes, fails, times out, or is cancelled — progress is
+     *  streamed separately via onInstallProgress, keyed by the
+     *  caller-generated `installId` (same pattern as session `turnId`). */
+    install(agentId: AgentId, installId: string): Promise<CliInstallOutcome>
+    /** Kills an in-progress install. A no-op if it already finished. */
+    cancelInstall(installId: string): void
+    onInstallProgress(installId: string, cb: (event: CliInstallProgressEvent) => void): Unsubscribe
+    /** Starts the CLI's own interactive process in a dedicated PTY so its
+     *  native sign-in flow runs for real — never an AgentDock-owned login
+     *  form, never a place credentials are typed into AgentDock itself. */
+    signIn(agentId: AgentId): Promise<CliSignInResult>
+    ptyWrite(ptyId: string, data: string): void
+    ptyResize(ptyId: string, cols: number, rows: number): void
+    ptyInterrupt(ptyId: string): void
+    /** Ends a sign-in PTY the user is done with (e.g. closing the panel
+     *  after signing in) — distinct from interrupt(), which just sends
+     *  Ctrl+C to whatever's running inside it. */
+    ptyKill(ptyId: string): void
+    onPtyData(ptyId: string, cb: (data: string) => void): Unsubscribe
+    onPtyExit(ptyId: string, cb: (info: TerminalExitInfo) => void): Unsubscribe
+    /** Opens a real OS terminal with the install or sign-in command
+     *  pre-filled — the manual-installation fallback, same underlying
+     *  mechanism as session.openExternalTerminal. */
+    openTerminal(agentId: AgentId, purpose: 'install' | 'signIn'): Promise<LaunchTerminalResult>
+    /** Reveals the on-disk installation log folder in the OS file manager. */
+    openInstallLogs(): Promise<{ ok: boolean; error?: string }>
   }
   handoff: {
     generateSummary(sessionId: string): Promise<string>

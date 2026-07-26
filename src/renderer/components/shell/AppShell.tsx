@@ -9,6 +9,7 @@ import { SessionView } from '../session/SessionView'
 import { SettingsView } from '../settings/SettingsView'
 import { ApprovalDialog } from '../session/ApprovalDialog'
 import { FileExplorerPanel } from '../explorer/FileExplorerPanel'
+import { CliSetupScreen } from '../setup/CliSetupScreen'
 import './AppShell.css'
 
 export function AppShell(): React.JSX.Element {
@@ -74,6 +75,7 @@ export function AppShell(): React.JSX.Element {
         )}
       </div>
       <SettingsView open={settingsViewOpen} onClose={() => setSettingsViewOpen(false)} />
+      <CliSetupScreen />
       <ApprovalDialog />
     </div>
   )

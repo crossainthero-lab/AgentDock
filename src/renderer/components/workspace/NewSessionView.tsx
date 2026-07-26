@@ -15,7 +15,7 @@ const AGENT_DESCRIPTIONS: Record<AgentId, string> = {
 }
 
 export function NewSessionView({ projectId }: { projectId: string }): React.JSX.Element {
-  const { projects, agents, agentsLoading, refreshAgents, refreshSessions, selectSession, setSettingsViewOpen } =
+  const { projects, agents, agentsLoading, refreshAgents, refreshSessions, selectSession, openCliSetupScreen } =
     useAppState()
   const project = projects.find((p) => p.id === projectId) ?? null
   const [startingAgent, setStartingAgent] = useState<AgentId | null>(null)
@@ -72,8 +72,8 @@ export function NewSessionView({ projectId }: { projectId: string }): React.JSX.
                     Start with {AGENT_DISPLAY_NAMES[agentId]}
                   </Button>
                 ) : (
-                  <Button variant="ghost" className="ad-agent-card__action" onClick={() => setSettingsViewOpen(true)}>
-                    Open Agent Settings
+                  <Button variant="ghost" className="ad-agent-card__action" onClick={openCliSetupScreen}>
+                    Open CLI Setup
                   </Button>
                 )}
               </div>

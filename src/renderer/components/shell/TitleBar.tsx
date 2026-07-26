@@ -1,6 +1,6 @@
 import type React from 'react'
 import { useEffect, useState } from 'react'
-import { FolderTree, GitBranch, Minus, Settings as SettingsIcon, Square, X } from 'lucide-react'
+import { AlertTriangle, FolderTree, GitBranch, Minus, Settings as SettingsIcon, Square, X } from 'lucide-react'
 import { getAgentDock } from '../../lib/agentDockClient'
 import { useAppState } from '../../state/AppStateContext'
 import { IconButton } from '../ui/IconButton'
@@ -21,7 +21,9 @@ export function TitleBar(): React.JSX.Element {
     newSessionProjectId,
     setSettingsViewOpen,
     fileExplorerOpen,
-    setFileExplorerOpen
+    setFileExplorerOpen,
+    hasCliSetupIssues,
+    openCliSetupScreen
   } = useAppState()
   const [isMaximized, setIsMaximized] = useState(false)
   const [branch, setBranch] = useState<string | null>(null)
@@ -79,6 +81,11 @@ export function TitleBar(): React.JSX.Element {
       </div>
 
       <div className="ad-titlebar__right no-drag">
+        {hasCliSetupIssues && (
+          <IconButton label="One or more agent CLIs need attention — open CLI Setup" size="sm" onClick={openCliSetupScreen}>
+            <AlertTriangle size={15} className="ad-titlebar__setup-warning" />
+          </IconButton>
+        )}
         <IconButton
           label="Toggle file explorer"
           size="sm"

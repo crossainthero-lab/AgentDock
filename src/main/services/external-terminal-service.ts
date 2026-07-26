@@ -68,6 +68,19 @@ function codexSandboxArgs(permissionMode: string): string[] {
   }
 }
 
+/** The subset of LaunchTerminalParams the two platform launchers below
+ *  actually touch — factored out so launchExternalTerminalWithCommand (the
+ *  CLI Setup Assistant's "Open terminal" manual-install/sign-in fallback)
+ *  can reuse the exact same Windows Terminal/cmd.exe/Terminal.app launch
+ *  mechanism without needing a full session context (permission mode,
+ *  native session id) that doesn't apply to it. LaunchTerminalParams
+ *  structurally satisfies this already, so every existing call site below
+ *  keeps working unchanged. */
+interface GenericLaunchParams {
+  executablePath: string
+  workspacePath: string
+}
+
 function trySpawnDetached(command: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -86,7 +99,7 @@ function trySpawnDetached(command: string, args: string[], cwd: string): Promise
   })
 }
 
-async function launchWindowsTerminal(params: LaunchTerminalParams, interactiveArgs: string[], command: string): Promise<LaunchTerminalResult> {
+async function launchWindowsTerminal(params: GenericLaunchParams, interactiveArgs: string[], command: string): Promise<LaunchTerminalResult> {
   try {
     // Windows Terminal: `-d <dir>` sets the starting directory; everything
     // after is the command to run inside the new tab.
@@ -130,7 +143,7 @@ function shQuote(value: string): string {
  *  crypto-random name under the OS temp directory, never derived from user
  *  input — gets embedded into the AppleScript string, so there is no
  *  second layer of escaping to get right (and no injection surface). */
-function buildMacLaunchScript(scriptPath: string, params: LaunchTerminalParams, interactiveArgs: string[]): string {
+function buildMacLaunchScript(scriptPath: string, params: GenericLaunchParams, interactiveArgs: string[]): string {
   const lines = [
     '#!/bin/sh',
     // Deletes itself as the very first thing it does, once actually
@@ -150,7 +163,7 @@ function buildMacLaunchScript(scriptPath: string, params: LaunchTerminalParams, 
   return lines.join('\n') + '\n'
 }
 
-async function launchMacTerminal(params: LaunchTerminalParams, interactiveArgs: string[], command: string): Promise<LaunchTerminalResult> {
+async function launchMacTerminal(params: GenericLaunchParams, interactiveArgs: string[], command: string): Promise<LaunchTerminalResult> {
   const scriptPath = join(tmpdir(), `agentdock-launch-${randomUUID()}.sh`)
   try {
     await writeFile(scriptPath, buildMacLaunchScript(scriptPath, params, interactiveArgs), { mode: 0o755 })
@@ -180,4 +193,28 @@ export async function launchExternalTerminal(params: LaunchTerminalParams): Prom
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/** The CLI Setup Assistant's "Open terminal" manual fallback — opens a real
+ *  OS terminal with an arbitrary already-resolved command pre-filled (an
+ *  install command, or a bare CLI invocation for a manual sign-in), reusing
+ *  the exact same Windows Terminal/cmd.exe/Terminal.app launch mechanism
+ *  launchExternalTerminal uses for a session's "Open new terminal here".
+ *  Never a shell string — `args` is always a plain argv array, passed
+ *  through to the same detached, non-shell spawn every other launcher here
+ *  uses. */
+export async function launchExternalTerminalWithCommand(params: {
+  executablePath: string
+  args: string[]
+  cwd: string
+}): Promise<LaunchTerminalResult> {
+  const command = [params.executablePath, ...params.args].join(' ')
+  const generic: GenericLaunchParams = { executablePath: params.executablePath, workspacePath: params.cwd }
+
+  if (process.platform === 'darwin') return launchMacTerminal(generic, params.args, command)
+  if (process.platform === 'win32') return launchWindowsTerminal(generic, params.args, command)
+
+  const error = 'Opening an external terminal is not supported on this platform yet.'
+  console.warn(`[external-terminal] ${error}`)
+  return { launched: false, method: null, command, error }
 }

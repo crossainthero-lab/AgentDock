@@ -36,7 +36,7 @@ export function SettingsView({ open, onClose }: { open: boolean; onClose: () => 
           ))}
         </nav>
         <div className="ad-settings__content">
-          {tab === 'agents' && <AgentsSettings />}
+          {tab === 'agents' && <AgentsSettings onOpenDiagnostics={() => setTab('advanced')} />}
           {tab === 'appearance' && <AppearanceSettings />}
           {tab === 'permissions' && <PermissionsSettings />}
           {tab === 'advanced' && <AdvancedSettings />}

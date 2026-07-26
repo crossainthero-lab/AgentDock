@@ -1,6 +1,6 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { getAgentDock } from '../lib/agentDockClient'
-import type { AgentDetection, Session, Settings, Workspace } from '@shared/types'
+import type { AgentDetection, CliSetupInfo, Session, Settings, Workspace } from '@shared/types'
 import { forget as forgetConversation } from './conversationStore'
 
 interface AppState {
@@ -47,6 +47,25 @@ interface AppState {
   settingsViewOpen: boolean
   setSettingsViewOpen: (open: boolean) => void
 
+  /** Per-agent CLI Setup Assistant status (installed/launchable/
+   *  authenticated) — a separate, richer classification from `agents`
+   *  above (see cli-setup-service.ts). Checked once at launch and again on
+   *  demand (install/sign-in completing, "Check again"). */
+  cliSetupStatuses: CliSetupInfo[]
+  cliSetupLoading: boolean
+  refreshCliSetup: () => Promise<CliSetupInfo[]>
+  /** True once at least one status check has completed and at least one
+   *  agent isn't 'ready' — drives the small warning indicators shown
+   *  outside the full setup screen. */
+  hasCliSetupIssues: boolean
+  cliSetupScreenOpen: boolean
+  openCliSetupScreen: () => void
+  closeCliSetupScreen: () => void
+  /** "Skip for now" — closes the screen AND persists the dismissal so it
+   *  doesn't reappear unprompted on every launch (small indicators still
+   *  show; the screen can always be reopened from Settings). */
+  dismissCliSetupScreen: () => Promise<void>
+
   fileExplorerOpen: boolean
   setFileExplorerOpen: (open: boolean) => void
 
@@ -70,6 +89,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
   const [settings, setSettings] = useState<Settings | null>(null)
   const [settingsViewOpen, setSettingsViewOpen] = useState(false)
   const [fileExplorerOpen, setFileExplorerOpen] = useState(false)
+
+  const [cliSetupStatuses, setCliSetupStatuses] = useState<CliSetupInfo[]>([])
+  const [cliSetupLoading, setCliSetupLoading] = useState(true)
+  const [cliSetupScreenOpen, setCliSetupScreenOpen] = useState(false)
+  // Guards the one-time "auto-show the setup screen at launch" decision —
+  // without this, refreshCliSetup() re-running later (e.g. the Settings
+  // "Check again" button) would keep re-opening the screen every time it
+  // still finds an issue, defeating "Skip for now"/re-closing it.
+  const autoPromptedRef = useRef(false)
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
@@ -100,13 +128,41 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
   const refreshSettings = useCallback(async () => {
     const current = await getAgentDock().settings.get()
     setSettings(current)
+    return current
+  }, [])
+
+  const refreshCliSetup = useCallback(async () => {
+    setCliSetupLoading(true)
+    try {
+      const list = await getAgentDock().cliSetup.getStatuses()
+      setCliSetupStatuses(list)
+      return list
+    } finally {
+      setCliSetupLoading(false)
+    }
   }, [])
 
   useEffect(() => {
     void refreshSessions()
     void refreshAgents()
     void refreshSettings()
-  }, [refreshSessions, refreshAgents, refreshSettings])
+    void refreshCliSetup()
+  }, [refreshSessions, refreshAgents, refreshSettings, refreshCliSetup])
+
+  // Automatic detection "when AgentDock starts": once both the persisted
+  // dismissal flag and the first real status check have arrived, show the
+  // full setup screen exactly once if anything isn't ready and the user
+  // hasn't previously chosen "Skip for now". Never re-triggers itself later
+  // (autoPromptedRef) — a later refreshCliSetup() (Settings "Check again",
+  // after an install finishes) only ever updates the small indicators
+  // unless the user explicitly reopens the full screen.
+  useEffect(() => {
+    if (autoPromptedRef.current) return
+    if (!settings || cliSetupLoading || cliSetupStatuses.length === 0) return
+    autoPromptedRef.current = true
+    const hasIssue = cliSetupStatuses.some((s) => s.status !== 'ready')
+    if (hasIssue && !settings.cliSetup.setupDismissed) setCliSetupScreenOpen(true)
+  }, [settings, cliSetupLoading, cliSetupStatuses])
 
   useEffect(() => {
     if (!settings) return
@@ -164,6 +220,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
     setSettings(updated)
   }, [])
 
+  const openCliSetupScreen = useCallback(() => setCliSetupScreenOpen(true), [])
+  const closeCliSetupScreen = useCallback(() => setCliSetupScreenOpen(false), [])
+  const dismissCliSetupScreen = useCallback(async () => {
+    await updateSettings({ cliSetup: { setupDismissed: true } })
+    setCliSetupScreenOpen(false)
+  }, [updateSettings])
+
   const deleteSession = useCallback(
     async (id: string) => {
       await getAgentDock().session.delete(id)
@@ -218,6 +281,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
       updateSettings,
       settingsViewOpen,
       setSettingsViewOpen,
+      cliSetupStatuses,
+      cliSetupLoading,
+      refreshCliSetup,
+      hasCliSetupIssues: cliSetupStatuses.length > 0 && cliSetupStatuses.some((s) => s.status !== 'ready'),
+      cliSetupScreenOpen,
+      openCliSetupScreen,
+      closeCliSetupScreen,
+      dismissCliSetupScreen,
       fileExplorerOpen,
       setFileExplorerOpen,
       sidebarCollapsed,
@@ -246,6 +317,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
       settings,
       updateSettings,
       settingsViewOpen,
+      cliSetupStatuses,
+      cliSetupLoading,
+      refreshCliSetup,
+      cliSetupScreenOpen,
+      openCliSetupScreen,
+      closeCliSetupScreen,
+      dismissCliSetupScreen,
       fileExplorerOpen,
       sidebarCollapsed
     ]

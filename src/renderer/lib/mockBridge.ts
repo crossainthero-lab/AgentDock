@@ -14,6 +14,9 @@ import type {
   AgentDetection,
   AgentId,
   ChangedFile,
+  CliInstallOutcome,
+  CliInstallPlan,
+  CliSetupInfo,
   CreateSessionInput,
   DiffResult,
   FileEntry,
@@ -41,7 +44,8 @@ if (typeof window !== 'undefined' && !window.agentDock) {
     appearance: 'system',
     agents: Object.fromEntries(AGENT_IDS.map((id) => [id, { customPath: null, permissionMode: 'default' }])) as Settings['agents'],
     permissions: { confirmDestructiveGitActions: true },
-    advanced: { gitExecutablePath: 'git' }
+    advanced: { gitExecutablePath: 'git' },
+    cliSetup: { setupDismissed: false }
   }
 
   const eventListeners = new Map<string, Set<(payload: SessionEventPayload) => void>>()
@@ -375,7 +379,8 @@ if (typeof window !== 'undefined' && !window.agentDock) {
           appearance: patch.appearance ?? settings.appearance,
           agents: { ...settings.agents, ...(patch.agents as Settings['agents'] | undefined) },
           permissions: { ...settings.permissions, ...patch.permissions },
-          advanced: { ...settings.advanced, ...patch.advanced }
+          advanced: { ...settings.advanced, ...patch.advanced },
+          cliSetup: { ...settings.cliSetup, ...patch.cliSetup }
         }
         return settings
       },
@@ -513,6 +518,58 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       async showContextMenu() {
         console.info('[AgentDock] The file-explorer context menu is a native Electron menu — not available in this browser preview.')
+      }
+    },
+    cliSetup: {
+      async getStatuses(): Promise<CliSetupInfo[]> {
+        return AGENT_IDS.map((agentId) => ({
+          agentId,
+          status: 'not-installed' as const,
+          detection: detectAgent(agentId),
+          authState: 'unknown' as const,
+          installSupported: false,
+          installSummary: 'Not available in the browser preview.',
+          manualInstructions: 'Not available in the browser preview.',
+          manualUrl: null
+        }))
+      },
+      async getPlan(agentId: AgentId): Promise<CliInstallPlan> {
+        return {
+          agentId,
+          supported: false,
+          summary: 'Not available in the browser preview.',
+          displayCommand: '',
+          requiresAdmin: false,
+          unsupportedReason: 'Not available in the browser preview.',
+          manualInstructions: 'Not available in the browser preview.',
+          manualUrl: null
+        }
+      },
+      async install(agentId: AgentId, installId: string): Promise<CliInstallOutcome> {
+        return { installId, agentId, ok: false, cancelled: false, timedOut: false, exitCode: null, error: 'Not available in the browser preview.', detection: null }
+      },
+      cancelInstall() {},
+      onInstallProgress() {
+        return () => {}
+      },
+      async signIn(agentId: AgentId) {
+        return { ok: false, ptyId: null, executablePath: null, error: `${agentId} sign-in is not available in the browser preview.` }
+      },
+      ptyWrite() {},
+      ptyResize() {},
+      ptyInterrupt() {},
+      ptyKill() {},
+      onPtyData() {
+        return () => {}
+      },
+      onPtyExit() {
+        return () => {}
+      },
+      async openTerminal() {
+        return { launched: false, method: null, command: '', error: 'Not available in the browser preview.' }
+      },
+      async openInstallLogs() {
+        return { ok: false, error: 'Not available in the browser preview.' }
       }
     }
   }

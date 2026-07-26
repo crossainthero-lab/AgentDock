@@ -223,6 +223,14 @@ export interface Settings {
   advanced: {
     gitExecutablePath: string
   }
+  cliSetup: {
+    /** Set when the user picks "Skip for now" on the full CLI Setup screen
+     *  — suppresses automatically re-showing that full screen on every
+     *  launch. Never hides the small per-agent warning indicators or the
+     *  "Open CLI Setup" entry point in Settings → Agents, and is cleared
+     *  the moment every agent reports 'ready' again. */
+    setupDismissed: boolean
+  }
 }
 
 export type SettingsPatch = {
@@ -230,6 +238,7 @@ export type SettingsPatch = {
   agents?: Partial<Record<AgentId, Partial<AgentSettings>>>
   permissions?: Partial<Settings['permissions']>
   advanced?: Partial<Settings['advanced']>
+  cliSetup?: Partial<Settings['cliSetup']>
 }
 
 export interface HandoffExecuteInput {
@@ -338,6 +347,80 @@ export interface Diagnostics {
   userDataPath: string
   databasePath: string
   codex: CodexRuntimeDiagnostics
+}
+
+// --- CLI Setup Assistant --------------------------------------------------
+// Types backing the first-run/Settings "CLI Setup" experience: automatic
+// detection status, assisted installation, and best-effort authentication
+// state for each supported agent CLI. See cli-setup-service.ts,
+// cli-installation-service.ts, and cli-authentication-service.ts.
+
+/** Setup screen's own status classification for one CLI — a layer on top of
+ *  AgentDetection plus best-effort auth detection. 'incompatible' means
+ *  something was found on disk but isn't a usable executable (e.g. a
+ *  rejected Windows .cmd/.bat shim, or a candidate that exists but failed
+ *  to run); 'could-not-verify' means detection itself couldn't complete
+ *  (e.g. the version probe timed out) rather than confidently finding
+ *  nothing. */
+export type CliSetupStatus = 'ready' | 'needs-login' | 'incompatible' | 'not-installed' | 'could-not-verify'
+
+export interface CliSetupInfo {
+  agentId: AgentId
+  status: CliSetupStatus
+  detection: AgentDetection
+  authState: AgentAuthState
+  installSupported: boolean
+  installSummary: string
+  manualInstructions: string
+  manualUrl: string | null
+}
+
+export interface CliInstallPlan {
+  agentId: AgentId
+  supported: boolean
+  /** Human-readable explanation of exactly what will run, shown before the
+   *  user confirms. */
+  summary: string
+  /** The exact command line shown to the user for transparency — display
+   *  only. The real spawn always uses a resolved absolute executable path
+   *  plus a plain argv array, never a shell string (see
+   *  cli-installation-service.ts). */
+  displayCommand: string
+  requiresAdmin: boolean
+  unsupportedReason: string | null
+  manualInstructions: string
+  manualUrl: string | null
+}
+
+export type CliInstallEventKind = 'started' | 'output' | 'exit' | 'timeout' | 'cancelled' | 'error'
+
+export interface CliInstallProgressEvent {
+  installId: string
+  agentId: AgentId
+  kind: CliInstallEventKind
+  /** Raw output chunk — present only for kind 'output'. */
+  text?: string
+  timestamp: string
+}
+
+export interface CliInstallOutcome {
+  installId: string
+  agentId: AgentId
+  ok: boolean
+  cancelled: boolean
+  timedOut: boolean
+  exitCode: number | null
+  error: string | null
+  /** Fresh detection re-run after the install finishes, so the caller never
+   *  needs a second round trip to know whether the CLI is usable now. */
+  detection: AgentDetection | null
+}
+
+export interface CliSignInResult {
+  ok: boolean
+  ptyId: string | null
+  executablePath: string | null
+  error: string | null
 }
 
 export interface TerminalExitInfo {

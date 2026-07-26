@@ -1,15 +1,31 @@
 import type React from 'react'
 import { useEffect, useState } from 'react'
-import { CheckCircle2, FolderOpen, RefreshCw, RotateCcw, XCircle } from 'lucide-react'
+import { CheckCircle2, ExternalLink, FolderOpen, RefreshCw, RotateCcw, Wrench, XCircle } from 'lucide-react'
 import { useAppState } from '../../state/AppStateContext'
 import { getAgentDock } from '../../lib/agentDockClient'
 import { AGENT_DISPLAY_NAMES, AGENT_IDS, type AgentCapabilities, type AgentId, type ExecutableTestResult } from '@shared/types'
 import { Button } from '../ui/Button'
+import { Badge } from '../ui/Badge'
 import { Spinner } from '../ui/Spinner'
 import './AgentsSettings.css'
 
-export function AgentsSettings(): React.JSX.Element {
-  const { agents, agentsLoading, refreshAgents, settings, updateSettings } = useAppState()
+const SETUP_STATUS_META: Record<string, { label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }> = {
+  ready: { label: 'Installed and ready', tone: 'success' },
+  'needs-login': { label: 'Sign-in required', tone: 'warning' },
+  incompatible: { label: 'Incompatible', tone: 'danger' },
+  'not-installed': { label: 'Not installed', tone: 'neutral' },
+  'could-not-verify': { label: 'Could not verify', tone: 'neutral' }
+}
+
+const AUTH_STATUS_LABEL: Record<string, string> = {
+  authenticated: 'Signed in and ready',
+  required: 'Sign-in required',
+  unknown: 'Authentication could not be verified'
+}
+
+export function AgentsSettings({ onOpenDiagnostics }: { onOpenDiagnostics?: () => void }): React.JSX.Element {
+  const { agents, agentsLoading, refreshAgents, settings, updateSettings, cliSetupStatuses, cliSetupLoading, refreshCliSetup, openCliSetupScreen } =
+    useAppState()
   const [pathDrafts, setPathDrafts] = useState<Partial<Record<AgentId, string>>>({})
   const [savingPath, setSavingPath] = useState<AgentId | null>(null)
   const [refreshingOne, setRefreshingOne] = useState<AgentId | null>(null)
@@ -83,19 +99,51 @@ export function AgentsSettings(): React.JSX.Element {
     await saveCustomPath(agentId, null)
   }
 
+  async function recheckSetup(agentId: AgentId): Promise<void> {
+    setRefreshingOne(agentId)
+    try {
+      await getAgentDock().agents.detect(agentId)
+      await Promise.all([refreshAgents(), refreshCliSetup()])
+    } finally {
+      setRefreshingOne(null)
+    }
+  }
+
   return (
     <div className="ad-settings-section">
       <div className="ad-settings-row" style={{ paddingTop: 0 }}>
         <h3 className="ad-settings-section__heading">Detected agents</h3>
-        <Button variant="ghost" size="sm" onClick={() => void refreshAgents()} disabled={agentsLoading}>
-          <RefreshCw size={12} className={agentsLoading ? 'ad-spin' : ''} />
-          Refresh all
-        </Button>
+        <div className="ad-settings-row__actions">
+          {onOpenDiagnostics && (
+            <Button variant="ghost" size="sm" onClick={onOpenDiagnostics}>
+              <ExternalLink size={12} />
+              Open diagnostics
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => void getAgentDock().cliSetup.openInstallLogs()}>
+            Open installation logs
+          </Button>
+          <Button variant="ghost" size="sm" onClick={openCliSetupScreen}>
+            <Wrench size={12} />
+            Open CLI Setup
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void Promise.all([refreshAgents(), refreshCliSetup()])}
+            disabled={agentsLoading || cliSetupLoading}
+          >
+            <RefreshCw size={12} className={agentsLoading || cliSetupLoading ? 'ad-spin' : ''} />
+            Refresh all
+          </Button>
+        </div>
       </div>
 
       {AGENT_IDS.map((agentId) => {
         const detection = agents.find((a) => a.agentId === agentId)
         const agentSettings = settings?.agents[agentId]
+        const setupInfo = cliSetupStatuses.find((s) => s.agentId === agentId)
+        const setupMeta = setupInfo ? SETUP_STATUS_META[setupInfo.status] : null
 
         return (
           <div key={agentId} className="ad-agent-settings-card">
@@ -107,8 +155,9 @@ export function AgentsSettings(): React.JSX.Element {
                   <XCircle size={15} className="ad-agent-settings-card__bad" />
                 )}
                 {AGENT_DISPLAY_NAMES[agentId]}
+                {setupMeta && <Badge tone={setupMeta.tone}>{setupMeta.label}</Badge>}
               </div>
-              <Button variant="ghost" size="sm" onClick={() => void refreshOne(agentId)} disabled={refreshingOne === agentId}>
+              <Button variant="ghost" size="sm" onClick={() => void recheckSetup(agentId)} disabled={refreshingOne === agentId}>
                 {refreshingOne === agentId ? <Spinner size={12} /> : <RefreshCw size={12} />}
               </Button>
             </div>
@@ -118,11 +167,20 @@ export function AgentsSettings(): React.JSX.Element {
                 <>
                   <div>Version: {detection.version ?? 'unknown'}</div>
                   <div>Path: {detection.executablePath}</div>
+                  <div>Authentication: {AUTH_STATUS_LABEL[setupInfo?.authState ?? 'unknown']}</div>
                 </>
               ) : (
                 <div className="ad-agent-settings-card__error">{detection?.error ?? 'Not detected.'}</div>
               )}
             </div>
+
+            {setupInfo && setupInfo.status !== 'ready' && (
+              <div className="ad-agent-settings-card__setup-actions">
+                <Button variant="secondary" size="sm" onClick={openCliSetupScreen}>
+                  {setupInfo.status === 'not-installed' ? 'Install' : 'Reinstall / Repair'}
+                </Button>
+              </div>
+            )}
 
             <div className="ad-settings-field">
               <span className="ad-settings-field__label">{AGENT_DISPLAY_NAMES[agentId]} executable</span>
