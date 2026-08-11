@@ -24,6 +24,7 @@ import type {
   FilePreview,
   HandoffExecuteInput,
   ImportFileResult,
+  ProviderUsageSnapshot,
   Session,
   SessionMessage,
   SessionWithMessages,
@@ -42,7 +43,9 @@ if (typeof window !== 'undefined' && !window.agentDock) {
   const messages = new Map<string, SessionMessage[]>()
   let settings: Settings = {
     appearance: 'system',
-    agents: Object.fromEntries(AGENT_IDS.map((id) => [id, { customPath: null, permissionMode: 'default' }])) as Settings['agents'],
+    agents: Object.fromEntries(
+      AGENT_IDS.map((id) => [id, { customPath: null, permissionMode: 'default', model: null, reasoningEffort: null }])
+    ) as Settings['agents'],
     permissions: { confirmDestructiveGitActions: true },
     advanced: { gitExecutablePath: 'git' },
     cliSetup: { setupDismissed: false }
@@ -203,6 +206,56 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       async getCapabilities(agentId) {
         return emptyCapabilities(agentId)
+      },
+      async getUsage(agentId): Promise<ProviderUsageSnapshot> {
+        return {
+          agent: agentId,
+          provider: agentId === 'claude-code' ? 'anthropic' : agentId === 'codex' ? 'openai' : 'google',
+          status: 'unsupported',
+          quality: 'unsupported',
+          usedPercent: null,
+          remainingPercent: null,
+          usedAmount: null,
+          totalAllowance: null,
+          resetAt: null,
+          window: null,
+          limitReached: false,
+          message: 'Exact usage unavailable in the browser preview.',
+          source: {
+            kind: 'none',
+            quality: 'unsupported',
+            command: null,
+            fetchedAt: new Date().toISOString(),
+            stale: false,
+            error: null
+          },
+          fetchedAt: new Date().toISOString()
+        }
+      },
+      async refreshUsage(agentId): Promise<ProviderUsageSnapshot> {
+        return {
+          agent: agentId,
+          provider: agentId === 'claude-code' ? 'anthropic' : agentId === 'codex' ? 'openai' : 'google',
+          status: 'unsupported',
+          quality: 'unsupported',
+          usedPercent: null,
+          remainingPercent: null,
+          usedAmount: null,
+          totalAllowance: null,
+          resetAt: null,
+          window: null,
+          limitReached: false,
+          message: 'Exact usage unavailable in the browser preview.',
+          source: {
+            kind: 'none',
+            quality: 'unsupported',
+            command: null,
+            fetchedAt: new Date().toISOString(),
+            stale: false,
+            error: null
+          },
+          fetchedAt: new Date().toISOString()
+        }
       },
       async browseExecutable() {
         return null

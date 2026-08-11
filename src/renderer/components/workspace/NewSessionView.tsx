@@ -1,11 +1,12 @@
 import type React from 'react'
 import { useState } from 'react'
-import { AlertCircle, ArrowRight, RefreshCw } from 'lucide-react'
+import { AlertCircle, ArrowRight, Columns3, RefreshCw } from 'lucide-react'
 import { useAppState } from '../../state/AppStateContext'
 import { AGENT_DISPLAY_NAMES, AGENT_IDS, type AgentId } from '@shared/types'
 import { getAgentDock } from '../../lib/agentDockClient'
 import { Spinner } from '../ui/Spinner'
 import { Button } from '../ui/Button'
+import { ProviderUsageIndicator } from '../usage/ProviderUsageIndicator'
 import './NewSessionView.css'
 
 const AGENT_DESCRIPTIONS: Record<AgentId, string> = {
@@ -15,8 +16,19 @@ const AGENT_DESCRIPTIONS: Record<AgentId, string> = {
 }
 
 export function NewSessionView({ projectId }: { projectId: string }): React.JSX.Element {
-  const { projects, agents, agentsLoading, refreshAgents, refreshSessions, selectSession, openCliSetupScreen } =
-    useAppState()
+  const {
+    projects,
+    agents,
+    agentsLoading,
+    refreshAgents,
+    refreshSessions,
+    selectSession,
+    openCliSetupScreen,
+    startCompareInProject,
+    providerUsages,
+    providerUsageLoading,
+    refreshProviderUsage
+  } = useAppState()
   const project = projects.find((p) => p.id === projectId) ?? null
   const [startingAgent, setStartingAgent] = useState<AgentId | null>(null)
 
@@ -79,6 +91,29 @@ export function NewSessionView({ projectId }: { projectId: string }): React.JSX.
               </div>
             )
           })}
+        </div>
+
+        <div className="ad-new-session__compare">
+          <div>
+            <strong>Compare Mode</strong>
+            <span>Run two or three installed agents side by side with one shared prompt.</span>
+          </div>
+          <Button variant="secondary" onClick={() => startCompareInProject(projectId)}>
+            <Columns3 size={14} />
+            Compare agents
+          </Button>
+        </div>
+
+        <div className="ad-new-session__usage" aria-label="Provider usage">
+          {AGENT_IDS.map((agentId) => (
+            <ProviderUsageIndicator
+              key={agentId}
+              usage={providerUsages[agentId]}
+              loading={providerUsageLoading[agentId]}
+              compact
+              onRefresh={() => void refreshProviderUsage(agentId)}
+            />
+          ))}
         </div>
 
         <button className="ad-new-session__refresh" onClick={() => void refreshAgents()} disabled={agentsLoading}>

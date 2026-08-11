@@ -2,11 +2,12 @@ import type React from 'react'
 import { useEffect, useState } from 'react'
 import { FileDiff, ListTree, MoreHorizontal, RefreshCw, Square, Terminal, TerminalSquare, UserPlus } from 'lucide-react'
 import { AGENT_DISPLAY_NAMES } from '@shared/types'
-import type { AgentCapabilities, AgentModelOption, Session, SessionStatus } from '@shared/types'
+import type { AgentCapabilities, AgentModelOption, ProviderUsageSnapshot, Session, SessionStatus } from '@shared/types'
 import { StatusDot } from '../ui/StatusDot'
 import { IconButton } from '../ui/IconButton'
 import { Menu } from '../ui/Menu'
 import { Button } from '../ui/Button'
+import { ProviderUsageIndicator } from '../usage/ProviderUsageIndicator'
 import './SessionHeader.css'
 
 interface SessionHeaderProps {
@@ -34,6 +35,8 @@ interface SessionHeaderProps {
   /** False for structured-transport agents (Claude, Codex) — they have no
    *  PTY/raw screen for the Terminal drawer to show. */
   showTerminal: boolean
+  usage?: ProviderUsageSnapshot | null
+  usageLoading?: boolean
   onOpenChanges: () => void
   onOpenTerminal: () => void
   onOpenHandoff: () => void
@@ -43,6 +46,7 @@ interface SessionHeaderProps {
   onSetReasoningEffort: (effortId: string) => void
   onSetPermissionMode: (modeId: string) => void
   onRunCommand: (commandId: string) => void
+  onRefreshUsage?: () => void
   /** Codex only — re-fetches the live model catalogue from Codex's
    *  app-server (`model/list`), replacing whatever's currently shown. */
   onRefreshModelCatalog?: () => void
@@ -156,6 +160,8 @@ export function SessionHeader({
   currentReasoningEffort,
   effectivePermissionMode,
   showTerminal,
+  usage,
+  usageLoading,
   onOpenChanges,
   onOpenTerminal,
   onOpenHandoff,
@@ -165,6 +171,7 @@ export function SessionHeader({
   onSetReasoningEffort,
   onSetPermissionMode,
   onRunCommand,
+  onRefreshUsage,
   onRefreshModelCatalog,
   refreshingModelCatalog,
   onOpenExternalTerminal,
@@ -267,6 +274,7 @@ export function SessionHeader({
           onSelect={onSetPermissionMode}
         />
         <Menu label="Commands" items={capabilities?.commands ?? []} onSelect={onRunCommand} />
+        <ProviderUsageIndicator usage={usage} loading={usageLoading} compact onRefresh={onRefreshUsage} />
 
         {showTerminal && (
           <IconButton label="Terminal" size="sm" onClick={onOpenTerminal}>

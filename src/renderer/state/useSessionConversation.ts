@@ -7,7 +7,7 @@
 // streamed in while switched away is silently lost.
 import { useCallback, useSyncExternalStore } from 'react'
 import { getAgentDock } from '../lib/agentDockClient'
-import type { LaunchTerminalResult } from '@shared/types'
+import type { LaunchTerminalResult, SendPromptOptions } from '@shared/types'
 import * as conversationStore from './conversationStore'
 import type { SessionConversationState } from './conversationStore'
 
@@ -15,6 +15,7 @@ export type { SessionConversationState }
 
 export interface SessionConversationActions {
   sendPrompt(text: string, images?: string[]): Promise<void>
+  sendPromptWithOptions(text: string, options: SendPromptOptions, images?: string[]): Promise<void>
   retryMessage(userMessageId: string): Promise<void>
   interrupt(): Promise<void>
   stop(): Promise<void>
@@ -55,6 +56,11 @@ export function useSessionConversation(sessionId: string | null): SessionConvers
     await conversationStore.sendPrompt(sessionId, state.session.agentId, text, images)
   }
 
+  async function sendPromptWithOptions(text: string, options: SendPromptOptions, images?: string[]): Promise<void> {
+    if (!sessionId || !state.session) return
+    await conversationStore.sendPrompt(sessionId, state.session.agentId, text, images, undefined, options)
+  }
+
   async function retryMessage(userMessageId: string): Promise<void> {
     if (!sessionId || !state.session) return
     await conversationStore.retryMessage(sessionId, state.session.agentId, userMessageId)
@@ -90,5 +96,16 @@ export function useSessionConversation(sessionId: string | null): SessionConvers
     return getAgentDock().session.openExternalTerminal(sessionId)
   }
 
-  return { ...state, sendPrompt, retryMessage, interrupt, stop, respondToInteraction, setModel, runCommand, openExternalTerminal }
+  return {
+    ...state,
+    sendPrompt,
+    sendPromptWithOptions,
+    retryMessage,
+    interrupt,
+    stop,
+    respondToInteraction,
+    setModel,
+    runCommand,
+    openExternalTerminal
+  }
 }

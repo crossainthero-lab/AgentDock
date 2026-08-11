@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { statSync } from 'node:fs'
-import type { AgentId, CreateSessionInput, LaunchTerminalResult, Session, SessionWithMessages } from '@shared/types'
+import type { AgentId, CreateSessionInput, LaunchTerminalResult, SendPromptOptions, Session, SessionWithMessages } from '@shared/types'
 import type { AgentChoice, AgentEvent } from '@shared/events/agent-event'
 import type { TraceEvent } from '@shared/events/trace-event'
 import { sessionRepo } from '../db/repositories/session-repo'
@@ -13,6 +13,7 @@ import { settingsService } from './settings-service'
 import { detectionService } from './detection-service'
 import { launchExternalTerminal } from './external-terminal-service'
 import { deriveTitleFromPrompt } from './title-service'
+import { providerUsageService } from './provider-usage-service'
 
 interface RunningSession {
   handle: AgentRunHandle
@@ -97,7 +98,14 @@ export const sessionService = {
     return { ...session, messages: messageRepo.listBySession(sessionId) }
   },
 
-  async sendPrompt(sessionId: string, text: string, turnId: string, images?: string[], displayText?: string): Promise<void> {
+  async sendPrompt(
+    sessionId: string,
+    text: string,
+    turnId: string,
+    images?: string[],
+    displayText?: string,
+    options?: SendPromptOptions
+  ): Promise<void> {
     if (process.env['AGENTDOCK_DEBUG_RAW_PTY']) {
       console.log(`[session:senddebug] sendPrompt called t=${Date.now()} sessionId=${sessionId} turnId=${turnId} text=${JSON.stringify(text)}`)
     }
@@ -160,6 +168,9 @@ export const sessionService = {
 
       const settings = settingsService.get()
       const agentSettings = settings.agents[session.agentId]
+      const effectivePermissionMode = options?.permissionMode ?? agentSettings.permissionMode
+      const effectiveModel = options?.model !== undefined ? options.model : agentSettings.model
+      const effectiveReasoningEffort = options?.reasoningEffort !== undefined ? options.reasoningEffort : agentSettings.reasoningEffort
       const detection = await detectionService.detect(session.agentId, agentSettings.customPath)
       if (!detection.installed || !detection.executablePath) {
         const message = detection.error ?? `${agentDisplay(session.agentId)} is not installed.`
@@ -178,11 +189,11 @@ export const sessionService = {
         session,
         workspacePath,
         nativeSessionId: sessionRepo.getNativeSessionId(sessionId),
-        permissionMode: agentSettings.permissionMode,
+        permissionMode: effectivePermissionMode ?? agentSettings.permissionMode,
         executablePath: detection.executablePath,
         executablePathSource: detection.resolutionSource,
-        model: agentSettings.model,
-        reasoningEffort: agentSettings.reasoningEffort
+        model: effectiveModel ?? null,
+        reasoningEffort: effectiveReasoningEffort ?? null
       })
 
       const runState: RunningSession = { handle, unsubscribe: () => {}, hadError: false }
@@ -244,6 +255,7 @@ export const sessionService = {
             if (nativeId) sessionRepo.setNativeSessionId(sessionId, nativeId)
             if (event.type === 'turn_failed') {
               runState.hadError = true
+              providerUsageService.recordCapacityEvent(session.agentId, event.reason)
               messageRepo.add(sessionId, 'error', { kind: 'text', text: event.reason })
               // Codex names the rejected model directly in its own error
               // text (confirmed live: "The 'X' model is not supported when

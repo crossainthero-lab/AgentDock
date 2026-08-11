@@ -6,6 +6,7 @@ import { useAppState } from '../../state/AppStateContext'
 import { EmptyWorkspace } from '../workspace/EmptyWorkspace'
 import { NewSessionView } from '../workspace/NewSessionView'
 import { SessionView } from '../session/SessionView'
+import { CompareModeView } from '../compare/CompareModeView'
 import { SettingsView } from '../settings/SettingsView'
 import { ApprovalDialog } from '../session/ApprovalDialog'
 import { FileExplorerPanel } from '../explorer/FileExplorerPanel'
@@ -19,6 +20,7 @@ export function AppShell(): React.JSX.Element {
     sessionsByProject,
     selectedSessionId,
     newSessionProjectId,
+    compareProjectId,
     workspace,
     settingsViewOpen,
     setSettingsViewOpen,
@@ -52,7 +54,7 @@ export function AppShell(): React.JSX.Element {
   const selectedSessionProjectId = selectedSessionId
     ? Object.entries(sessionsByProject).find(([, sessions]) => sessions.some((s) => s.id === selectedSessionId))?.[0]
     : undefined
-  const activeProjectId = selectedSessionProjectId ?? effectiveNewSessionProjectId ?? null
+  const activeProjectId = selectedSessionProjectId ?? compareProjectId ?? effectiveNewSessionProjectId ?? null
 
   return (
     <div className="ad-app-shell">
@@ -60,8 +62,10 @@ export function AppShell(): React.JSX.Element {
       <div className="ad-app-shell__body">
         <SessionSidebar />
         <main className="ad-app-shell__main">
-          {projectsLoading ? null : projects.length === 0 ? (
+          {projectsLoading && projects.length === 0 ? null : projects.length === 0 ? (
             <EmptyWorkspace />
+          ) : compareProjectId ? (
+            <CompareModeView projectId={compareProjectId} />
           ) : selectedSessionId ? (
             <SessionView sessionId={selectedSessionId} />
           ) : effectiveNewSessionProjectId ? (

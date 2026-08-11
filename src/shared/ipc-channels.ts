@@ -16,6 +16,8 @@ export const IpcChannels = {
   agentsDetect: 'agents:detect',
   agentsSetCustomPath: 'agents:setCustomPath',
   agentsGetCapabilities: 'agents:getCapabilities',
+  agentsGetUsage: 'agents:getUsage',
+  agentsRefreshUsage: 'agents:refreshUsage',
   agentsBrowseExecutable: 'agents:browseExecutable',
   agentsTestExecutable: 'agents:testExecutable',
 

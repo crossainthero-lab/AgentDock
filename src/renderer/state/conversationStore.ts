@@ -33,7 +33,7 @@
 // the user was looking at a different session is caught up correctly, not
 // wiped.
 import { getAgentDock } from '../lib/agentDockClient'
-import type { Session, SessionStatus } from '@shared/types'
+import type { SendPromptOptions, Session, SessionStatus } from '@shared/types'
 import { AGENT_DISPLAY_NAMES } from '@shared/types'
 import type { AgentEvent } from '@shared/events/agent-event'
 import type { TraceEvent } from '@shared/events/trace-event'
@@ -325,7 +325,8 @@ export async function sendPrompt(
   agentId: Session['agentId'],
   text: string,
   images?: string[],
-  displayText?: string
+  displayText?: string,
+  options?: SendPromptOptions
 ): Promise<void> {
   const entry = ensureTracked(sessionId)
   const userMessageId = crypto.randomUUID()
@@ -340,7 +341,7 @@ export async function sendPrompt(
   notify(entry)
 
   try {
-    await getAgentDock().session.sendPrompt(sessionId, text, turnId, images, displayText)
+    await getAgentDock().session.sendPrompt(sessionId, text, turnId, images, displayText, options)
     const current = entries.get(sessionId)
     if (!current) return
     current.reducer = markSent(current.reducer, userMessageId)

@@ -24,6 +24,8 @@ import type {
   HandoffExecuteResult,
   ImportFileResult,
   LaunchTerminalResult,
+  ProviderUsageSnapshot,
+  SendPromptOptions,
   Session,
   SessionWithMessages,
   Settings,
@@ -87,6 +89,8 @@ export interface AgentDockApi {
     detect(agentId: AgentId): Promise<AgentDetection>
     setCustomPath(agentId: AgentId, customPath: string | null): Promise<AgentDetection>
     getCapabilities(agentId: AgentId): Promise<AgentCapabilities>
+    getUsage(agentId: AgentId): Promise<ProviderUsageSnapshot>
+    refreshUsage(agentId: AgentId): Promise<ProviderUsageSnapshot>
     /** Opens a native file picker for choosing an executable override.
      *  Returns null if the user cancels. */
     browseExecutable(agentId: AgentId): Promise<string | null>
@@ -183,7 +187,14 @@ export interface AgentDockApi {
      *  gets persisted/rendered as the user bubble instead of `text` — see
      *  MessageContent's own doc comment; `text` is still exactly what's
      *  delivered to the agent. */
-    sendPrompt(sessionId: string, text: string, turnId: string, images?: string[], displayText?: string): Promise<void>
+    sendPrompt(
+      sessionId: string,
+      text: string,
+      turnId: string,
+      images?: string[],
+      displayText?: string,
+      options?: SendPromptOptions
+    ): Promise<void>
     interrupt(sessionId: string): Promise<void>
     stop(sessionId: string): Promise<void>
     delete(sessionId: string): Promise<void>

@@ -166,6 +166,74 @@ export interface CreateSessionInput {
   continuedFromSessionId?: string | null
 }
 
+/** Optional per-turn launch overrides. Normal Chat omits this and keeps using
+ *  Settings as the source of truth. Compare Mode supplies explicit,
+ *  non-persisted values so panes can choose their own model and can enforce
+ *  a read-only/write-safe policy without rewriting global settings. */
+export interface SendPromptOptions {
+  permissionMode?: string | null
+  model?: string | null
+  reasoningEffort?: string | null
+}
+
+export type ProviderId = 'anthropic' | 'openai' | 'google'
+
+export type ProviderUsageStatus =
+  | 'exact'
+  | 'partial'
+  | 'available'
+  | 'limit_reached'
+  | 'unsupported'
+  | 'unavailable'
+  | 'stale'
+  | 'error'
+
+export type ProviderUsageQuality =
+  | 'exact'
+  | 'partial'
+  | 'auth-status'
+  | 'capacity-signal'
+  | 'unsupported'
+  | 'unavailable'
+  | 'stale'
+  | 'error'
+
+export interface ProviderUsageAmount {
+  value: number
+  unit: string
+  label?: string
+}
+
+export interface ProviderUsageSource {
+  kind: 'cli' | 'provider-event' | 'cache' | 'none'
+  quality: ProviderUsageQuality
+  command: string | null
+  fetchedAt: string
+  stale: boolean
+  error: string | null
+}
+
+/** Account/provider usage snapshot for dashboard UI. Percentages are null
+ *  unless a provider reports enough data to calculate them; a capacity event
+ *  can truthfully report limitReached/resetAt without inventing a quota
+ *  number. */
+export interface ProviderUsageSnapshot {
+  agent: AgentId
+  provider: ProviderId
+  status: ProviderUsageStatus
+  quality: ProviderUsageQuality
+  usedPercent: number | null
+  remainingPercent: number | null
+  usedAmount: ProviderUsageAmount | null
+  totalAllowance: ProviderUsageAmount | null
+  resetAt: string | null
+  window: string | null
+  limitReached: boolean
+  message: string
+  source: ProviderUsageSource
+  fetchedAt: string
+}
+
 export type ChangedFileStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
 
 export interface ChangedFile {
