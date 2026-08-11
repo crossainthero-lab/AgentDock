@@ -19,6 +19,7 @@ interface RunningSession {
   handle: AgentRunHandle
   unsubscribe: () => void
   hadError: boolean
+  currentTurnId: string | null
 }
 
 interface PendingInteraction {
@@ -34,6 +35,7 @@ export interface SessionEventPayload {
 }
 
 const running = new Map<string, RunningSession>()
+const activeTurnIds = new Map<string, string>()
 const eventListeners = new Map<string, Set<(payload: SessionEventPayload) => void>>()
 const terminalListeners = new Map<string, Set<(data: string) => void>>()
 const terminalExitListeners = new Map<string, Set<(info: { exitCode: number | null; signal: string | null }) => void>>()
@@ -148,6 +150,7 @@ export const sessionService = {
       images: images && images.length > 0 ? images : undefined
     })
     sessionRepo.setStatus(sessionId, 'running')
+    activeTurnIds.set(sessionId, turnId)
 
     let run = running.get(sessionId)
 
@@ -196,7 +199,7 @@ export const sessionService = {
         reasoningEffort: effectiveReasoningEffort ?? null
       })
 
-      const runState: RunningSession = { handle, unsubscribe: () => {}, hadError: false }
+      const runState: RunningSession = { handle, unsubscribe: () => {}, hadError: false, currentTurnId: turnId }
 
       const unsubscribeEvent = handle.onEvent((event) => {
         switch (event.type) {
@@ -278,6 +281,7 @@ export const sessionService = {
             }
             sessionRepo.setStatus(sessionId, event.type === 'turn_failed' || runState.hadError ? 'error' : 'idle')
             running.delete(sessionId)
+            activeTurnIds.delete(sessionId)
             pendingInteractions.delete(sessionId)
             broadcastEvent(sessionId, event)
             return
@@ -289,6 +293,7 @@ export const sessionService = {
             if (nativeId) sessionRepo.setNativeSessionId(sessionId, nativeId)
             sessionRepo.setStatus(sessionId, 'cancelled')
             running.delete(sessionId)
+            activeTurnIds.delete(sessionId)
             pendingInteractions.delete(sessionId)
             broadcastEvent(sessionId, event)
             return
@@ -302,6 +307,7 @@ export const sessionService = {
             messageRepo.add(sessionId, 'error', { kind: 'text', text: event.reason })
             sessionRepo.setStatus(sessionId, 'exited')
             running.delete(sessionId)
+            activeTurnIds.delete(sessionId)
             pendingInteractions.delete(sessionId)
             broadcastEvent(sessionId, event)
             return
@@ -337,6 +343,7 @@ export const sessionService = {
       run.handle.setPermissionMode?.(settings.agents[session.agentId].permissionMode)
     }
 
+    run.currentTurnId = turnId
     trace(sessionId, { kind: 'PTY_WRITE_REQUESTED' })
     run.handle.send(text, turnId, images)
     trace(sessionId, { kind: 'PTY_WRITE_SUCCEEDED' })
@@ -425,11 +432,28 @@ export const sessionService = {
     const run = running.get(sessionId)
     if (run) {
       run.handle.stop()
-      run.unsubscribe()
-      running.delete(sessionId)
+      if (running.get(sessionId) === run) {
+        const turnId = run.currentTurnId ?? activeTurnIds.get(sessionId)
+        run.unsubscribe()
+        running.delete(sessionId)
+        activeTurnIds.delete(sessionId)
+        pendingInteractions.delete(sessionId)
+        sessionRepo.setStatus(sessionId, 'cancelled')
+        if (turnId) {
+          broadcastEvent(sessionId, { type: 'turn_cancelled', sessionId, turnId })
+        }
+      }
+      return
     }
+    const activeTurnId = activeTurnIds.get(sessionId)
     pendingInteractions.delete(sessionId)
-    sessionRepo.setStatus(sessionId, 'stopped')
+    if (activeTurnId) {
+      activeTurnIds.delete(sessionId)
+      sessionRepo.setStatus(sessionId, 'cancelled')
+      broadcastEvent(sessionId, { type: 'turn_cancelled', sessionId, turnId: activeTurnId })
+    } else {
+      sessionRepo.setStatus(sessionId, 'stopped')
+    }
   },
 
   delete(sessionId: string): void {
@@ -480,6 +504,10 @@ export const sessionService = {
 
   isRunning(sessionId: string): boolean {
     return running.get(sessionId)?.handle.isRunning ?? false
+  },
+
+  __dropRunningHandleForTests(sessionId: string): void {
+    running.delete(sessionId)
   }
 }
 

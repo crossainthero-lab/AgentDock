@@ -1,7 +1,7 @@
 import type React from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Columns3, Square } from 'lucide-react'
-import { AGENT_DISPLAY_NAMES, AGENT_IDS, type AgentCapabilities, type AgentId, type AgentModelOption, type Session } from '@shared/types'
+import { AGENT_DISPLAY_NAMES, AGENT_IDS, type AgentCapabilities, type AgentId, type AgentModelOption, type Session, type SessionStatus } from '@shared/types'
 import { useAppState } from '../../state/AppStateContext'
 import { useSessionConversation } from '../../state/useSessionConversation'
 import { sendPrompt as sendConversationPrompt } from '../../state/conversationStore'
@@ -23,6 +23,16 @@ const SAFE_PERMISSION_MODE: Record<AgentId, string> = {
   'claude-code': 'plan',
   codex: 'read-only',
   antigravity: 'plan'
+}
+
+function paneStateLabel(status: SessionStatus, isBusy: boolean): string {
+  if (isBusy) return 'Running'
+  if (status === 'error') return 'Error'
+  if (status === 'cancelled' || status === 'stopped') return 'Cancelled'
+  if (status === 'exited') return 'Exited'
+  if (status === 'waiting_for_permission') return 'Waiting'
+  if (status === 'waiting_for_user') return 'Waiting'
+  return 'Ready'
 }
 
 function ComparePane({
@@ -56,7 +66,7 @@ function ComparePane({
         </div>
         <div className="ad-compare-pane__state">
           <StatusDot status={conversation.status} />
-          <span>{conversation.isBusy ? 'Running' : conversation.status === 'error' ? 'Error' : 'Ready'}</span>
+          <span>{paneStateLabel(conversation.status, conversation.isBusy)}</span>
         </div>
       </header>
 
@@ -79,7 +89,7 @@ function ComparePane({
           onRefresh={() => void refreshProviderUsage(pane.agentId)}
         />
         {conversation.isBusy && (
-          <Button variant="secondary" size="sm" onClick={() => void conversation.interrupt()}>
+          <Button variant="secondary" size="sm" onClick={() => void conversation.stop()}>
             <Square size={13} />
             Stop
           </Button>

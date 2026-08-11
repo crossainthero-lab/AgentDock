@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { AgentCapabilities, AgentDetection, AgentId, ProviderUsageSnapshot, Session, Workspace } from '../../src/shared/types'
 
-const { mockState, api, sendPromptMock, interruptBySession, busySessions } = vi.hoisted(() => ({
+const { mockState, api, sendPromptMock, interruptBySession, stopBySession, busySessions } = vi.hoisted(() => ({
   mockState: {
     projects: [{ id: 'w1', path: 'C:\\repo', name: 'Repo', addedAt: '', lastOpenedAt: '', collapsed: false }] as Workspace[],
     agents: [] as AgentDetection[],
@@ -34,6 +34,7 @@ const { mockState, api, sendPromptMock, interruptBySession, busySessions } = vi.
   },
   sendPromptMock: vi.fn(),
   interruptBySession: {} as Record<string, ReturnType<typeof vi.fn>>,
+  stopBySession: {} as Record<string, ReturnType<typeof vi.fn>>,
   busySessions: new Set<string>()
 }))
 
@@ -52,6 +53,7 @@ vi.mock('../../src/renderer/state/conversationStore', () => ({
 vi.mock('../../src/renderer/state/useSessionConversation', () => ({
   useSessionConversation: (sessionId: string) => {
     interruptBySession[sessionId] ??= vi.fn()
+    stopBySession[sessionId] ??= vi.fn()
     return {
       session: { id: sessionId, workspaceId: 'w1', agentId: sessionId.split('-')[1] as AgentId, title: sessionId, status: 'idle' },
       items: [],
@@ -69,7 +71,7 @@ vi.mock('../../src/renderer/state/useSessionConversation', () => ({
       sendPromptWithOptions: vi.fn(),
       retryMessage: vi.fn(),
       interrupt: interruptBySession[sessionId],
-      stop: vi.fn(),
+      stop: stopBySession[sessionId],
       respondToInteraction: vi.fn(),
       setModel: vi.fn(),
       runCommand: vi.fn(),
@@ -113,6 +115,7 @@ function session(agentId: AgentId): Session {
 beforeEach(() => {
   vi.clearAllMocks()
   for (const key of Object.keys(interruptBySession)) delete interruptBySession[key]
+  for (const key of Object.keys(stopBySession)) delete stopBySession[key]
   busySessions.clear()
   mockState.agents = [detection('claude-code'), detection('codex'), detection('antigravity')]
   api.session.create.mockImplementation(async (input: { agentId: AgentId }) => session(input.agentId))
@@ -184,8 +187,9 @@ describe('CompareModeView', () => {
     fireEvent.click(screen.getByText('Start Compare'))
     await waitFor(() => expect(screen.getAllByText('Stop').length).toBeGreaterThan(0))
     fireEvent.click(screen.getAllByText('Stop')[0])
-    expect(interruptBySession['s-claude-code']).toHaveBeenCalledTimes(1)
-    expect(interruptBySession['s-codex']).not.toHaveBeenCalled()
+    expect(stopBySession['s-claude-code']).toHaveBeenCalledTimes(1)
+    expect(interruptBySession['s-claude-code']).not.toHaveBeenCalled()
+    expect(stopBySession['s-codex']).not.toHaveBeenCalled()
   })
 
   it('does not expose unavailable agents for selection', async () => {

@@ -441,6 +441,57 @@ describe('sessionService — new session-state transitions (waiting_for_permissi
     expect(sessionService.isRunning('s-cancel')).toBe(false)
   })
 
+  it('stop() kills only the targeted active run and broadcasts turn_cancelled even if the adapter emits nothing', async () => {
+    const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
+    const stoppedEvents: AgentEvent[] = []
+    const stopUnsubscribe = sessionService.onEvent('s-stop-one', (payload) => stoppedEvents.push(payload.event))
+
+    const firstHandle = makeFakeHandle()
+    fakeHandle = firstHandle
+    await sessionService.sendPrompt('s-stop-one', 'slow work', 't-stop-one')
+
+    const secondHandle = makeFakeHandle()
+    fakeHandle = secondHandle
+    await sessionService.sendPrompt('s-keep-running', 'other slow work', 't-keep-running')
+    vi.mocked(sessionRepo.setStatus).mockClear()
+
+    sessionService.stop('s-stop-one')
+
+    expect(firstHandle.stop).toHaveBeenCalledTimes(1)
+    expect(firstHandle.interrupt).not.toHaveBeenCalled()
+    expect(secondHandle.stop).not.toHaveBeenCalled()
+    expect(sessionService.isRunning('s-stop-one')).toBe(false)
+    expect(sessionService.isRunning('s-keep-running')).toBe(true)
+    expect(sessionRepo.setStatus).toHaveBeenCalledWith('s-stop-one', 'cancelled')
+    expect(stoppedEvents).toContainEqual({ type: 'turn_cancelled', sessionId: 's-stop-one', turnId: 't-stop-one' })
+
+    const restartedHandle = makeFakeHandle()
+    fakeHandle = restartedHandle
+    await sessionService.sendPrompt('s-stop-one', 'next prompt', 't-stop-two')
+    expect(restartedHandle.send).toHaveBeenCalledWith('next prompt', 't-stop-two', undefined)
+
+    sessionService.stop('s-stop-one')
+    sessionService.stop('s-keep-running')
+    stopUnsubscribe()
+  })
+
+  it('stop() broadcasts turn_cancelled for a still-active turn even if the run handle has already detached', async () => {
+    const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
+    const received: AgentEvent[] = []
+    const unsubscribe = sessionService.onEvent('s-detached-stop', (payload) => received.push(payload.event))
+
+    await sessionService.sendPrompt('s-detached-stop', 'slow work', 't-detached-stop')
+    sessionService.__dropRunningHandleForTests('s-detached-stop')
+    vi.mocked(sessionRepo.setStatus).mockClear()
+
+    sessionService.stop('s-detached-stop')
+
+    expect(fakeHandle.stop).not.toHaveBeenCalled()
+    expect(sessionRepo.setStatus).toHaveBeenCalledWith('s-detached-stop', 'cancelled')
+    expect(received).toContainEqual({ type: 'turn_cancelled', sessionId: 's-detached-stop', turnId: 't-detached-stop' })
+    unsubscribe()
+  })
+
   it('turn_exited sets status to exited and persists an error message, distinct from turn_failed', async () => {
     const { sessionRepo } = await import('../../src/main/db/repositories/session-repo')
     await sessionService.sendPrompt('s-exit', 'go', 't1')
