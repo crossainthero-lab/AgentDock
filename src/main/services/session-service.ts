@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { statSync } from 'node:fs'
-import type { AgentId, CreateSessionInput, LaunchTerminalResult, Session, SessionWithMessages } from '@shared/types'
+import type { AgentId, CreateSessionInput, LaunchTerminalResult, SendPromptOptions, Session, SessionWithMessages } from '@shared/types'
 import type { AgentChoice, AgentEvent } from '@shared/events/agent-event'
 import type { TraceEvent } from '@shared/events/trace-event'
 import { sessionRepo } from '../db/repositories/session-repo'
@@ -13,11 +13,13 @@ import { settingsService } from './settings-service'
 import { detectionService } from './detection-service'
 import { launchExternalTerminal } from './external-terminal-service'
 import { deriveTitleFromPrompt } from './title-service'
+import { providerUsageService } from './provider-usage-service'
 
 interface RunningSession {
   handle: AgentRunHandle
   unsubscribe: () => void
   hadError: boolean
+  currentTurnId: string | null
 }
 
 interface PendingInteraction {
@@ -33,6 +35,7 @@ export interface SessionEventPayload {
 }
 
 const running = new Map<string, RunningSession>()
+const activeTurnIds = new Map<string, string>()
 const eventListeners = new Map<string, Set<(payload: SessionEventPayload) => void>>()
 const terminalListeners = new Map<string, Set<(data: string) => void>>()
 const terminalExitListeners = new Map<string, Set<(info: { exitCode: number | null; signal: string | null }) => void>>()
@@ -97,7 +100,14 @@ export const sessionService = {
     return { ...session, messages: messageRepo.listBySession(sessionId) }
   },
 
-  async sendPrompt(sessionId: string, text: string, turnId: string, images?: string[], displayText?: string): Promise<void> {
+  async sendPrompt(
+    sessionId: string,
+    text: string,
+    turnId: string,
+    images?: string[],
+    displayText?: string,
+    options?: SendPromptOptions
+  ): Promise<void> {
     if (process.env['AGENTDOCK_DEBUG_RAW_PTY']) {
       console.log(`[session:senddebug] sendPrompt called t=${Date.now()} sessionId=${sessionId} turnId=${turnId} text=${JSON.stringify(text)}`)
     }
@@ -140,6 +150,7 @@ export const sessionService = {
       images: images && images.length > 0 ? images : undefined
     })
     sessionRepo.setStatus(sessionId, 'running')
+    activeTurnIds.set(sessionId, turnId)
 
     let run = running.get(sessionId)
 
@@ -160,6 +171,9 @@ export const sessionService = {
 
       const settings = settingsService.get()
       const agentSettings = settings.agents[session.agentId]
+      const effectivePermissionMode = options?.permissionMode ?? agentSettings.permissionMode
+      const effectiveModel = options?.model !== undefined ? options.model : agentSettings.model
+      const effectiveReasoningEffort = options?.reasoningEffort !== undefined ? options.reasoningEffort : agentSettings.reasoningEffort
       const detection = await detectionService.detect(session.agentId, agentSettings.customPath)
       if (!detection.installed || !detection.executablePath) {
         const message = detection.error ?? `${agentDisplay(session.agentId)} is not installed.`
@@ -178,14 +192,14 @@ export const sessionService = {
         session,
         workspacePath,
         nativeSessionId: sessionRepo.getNativeSessionId(sessionId),
-        permissionMode: agentSettings.permissionMode,
+        permissionMode: effectivePermissionMode ?? agentSettings.permissionMode,
         executablePath: detection.executablePath,
         executablePathSource: detection.resolutionSource,
-        model: agentSettings.model,
-        reasoningEffort: agentSettings.reasoningEffort
+        model: effectiveModel ?? null,
+        reasoningEffort: effectiveReasoningEffort ?? null
       })
 
-      const runState: RunningSession = { handle, unsubscribe: () => {}, hadError: false }
+      const runState: RunningSession = { handle, unsubscribe: () => {}, hadError: false, currentTurnId: turnId }
 
       const unsubscribeEvent = handle.onEvent((event) => {
         switch (event.type) {
@@ -244,6 +258,7 @@ export const sessionService = {
             if (nativeId) sessionRepo.setNativeSessionId(sessionId, nativeId)
             if (event.type === 'turn_failed') {
               runState.hadError = true
+              providerUsageService.recordCapacityEvent(session.agentId, event.reason)
               messageRepo.add(sessionId, 'error', { kind: 'text', text: event.reason })
               // Codex names the rejected model directly in its own error
               // text (confirmed live: "The 'X' model is not supported when
@@ -266,6 +281,7 @@ export const sessionService = {
             }
             sessionRepo.setStatus(sessionId, event.type === 'turn_failed' || runState.hadError ? 'error' : 'idle')
             running.delete(sessionId)
+            activeTurnIds.delete(sessionId)
             pendingInteractions.delete(sessionId)
             broadcastEvent(sessionId, event)
             return
@@ -277,6 +293,7 @@ export const sessionService = {
             if (nativeId) sessionRepo.setNativeSessionId(sessionId, nativeId)
             sessionRepo.setStatus(sessionId, 'cancelled')
             running.delete(sessionId)
+            activeTurnIds.delete(sessionId)
             pendingInteractions.delete(sessionId)
             broadcastEvent(sessionId, event)
             return
@@ -290,6 +307,7 @@ export const sessionService = {
             messageRepo.add(sessionId, 'error', { kind: 'text', text: event.reason })
             sessionRepo.setStatus(sessionId, 'exited')
             running.delete(sessionId)
+            activeTurnIds.delete(sessionId)
             pendingInteractions.delete(sessionId)
             broadcastEvent(sessionId, event)
             return
@@ -325,6 +343,7 @@ export const sessionService = {
       run.handle.setPermissionMode?.(settings.agents[session.agentId].permissionMode)
     }
 
+    run.currentTurnId = turnId
     trace(sessionId, { kind: 'PTY_WRITE_REQUESTED' })
     run.handle.send(text, turnId, images)
     trace(sessionId, { kind: 'PTY_WRITE_SUCCEEDED' })
@@ -413,11 +432,28 @@ export const sessionService = {
     const run = running.get(sessionId)
     if (run) {
       run.handle.stop()
-      run.unsubscribe()
-      running.delete(sessionId)
+      if (running.get(sessionId) === run) {
+        const turnId = run.currentTurnId ?? activeTurnIds.get(sessionId)
+        run.unsubscribe()
+        running.delete(sessionId)
+        activeTurnIds.delete(sessionId)
+        pendingInteractions.delete(sessionId)
+        sessionRepo.setStatus(sessionId, 'cancelled')
+        if (turnId) {
+          broadcastEvent(sessionId, { type: 'turn_cancelled', sessionId, turnId })
+        }
+      }
+      return
     }
+    const activeTurnId = activeTurnIds.get(sessionId)
     pendingInteractions.delete(sessionId)
-    sessionRepo.setStatus(sessionId, 'stopped')
+    if (activeTurnId) {
+      activeTurnIds.delete(sessionId)
+      sessionRepo.setStatus(sessionId, 'cancelled')
+      broadcastEvent(sessionId, { type: 'turn_cancelled', sessionId, turnId: activeTurnId })
+    } else {
+      sessionRepo.setStatus(sessionId, 'stopped')
+    }
   },
 
   delete(sessionId: string): void {
@@ -468,6 +504,10 @@ export const sessionService = {
 
   isRunning(sessionId: string): boolean {
     return running.get(sessionId)?.handle.isRunning ?? false
+  },
+
+  __dropRunningHandleForTests(sessionId: string): void {
+    running.delete(sessionId)
   }
 }
 

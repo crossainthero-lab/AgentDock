@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { getAgentDock } from '../lib/agentDockClient'
-import type { AgentDetection, CliSetupInfo, Session, Settings, Workspace } from '@shared/types'
+import type { AgentDetection, AgentId, CliSetupInfo, ProviderUsageSnapshot, Session, Settings, Workspace } from '@shared/types'
+import { AGENT_IDS } from '@shared/types'
 import { forget as forgetConversation } from './conversationStore'
 
 interface AppState {
@@ -36,10 +37,16 @@ interface AppState {
    *  be `workspace`. */
   newSessionProjectId: string | null
   startNewSessionInProject: (projectId: string) => void
+  compareProjectId: string | null
+  startCompareInProject: (projectId: string) => void
 
   agents: AgentDetection[]
   agentsLoading: boolean
   refreshAgents: () => Promise<void>
+
+  providerUsages: Partial<Record<AgentId, ProviderUsageSnapshot>>
+  providerUsageLoading: Partial<Record<AgentId, boolean>>
+  refreshProviderUsage: (agentId: AgentId) => Promise<void>
 
   settings: Settings | null
   updateSettings: (patch: Parameters<ReturnType<typeof getAgentDock>['settings']['update']>[0]) => Promise<void>
@@ -82,9 +89,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
 
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [newSessionProjectId, setNewSessionProjectId] = useState<string | null>(null)
+  const [compareProjectId, setCompareProjectId] = useState<string | null>(null)
 
   const [agents, setAgents] = useState<AgentDetection[]>([])
   const [agentsLoading, setAgentsLoading] = useState(true)
+  const [providerUsages, setProviderUsages] = useState<Partial<Record<AgentId, ProviderUsageSnapshot>>>({})
+  const [providerUsageLoading, setProviderUsageLoading] = useState<Partial<Record<AgentId, boolean>>>({})
 
   const [settings, setSettings] = useState<Settings | null>(null)
   const [settingsViewOpen, setSettingsViewOpen] = useState(false)
@@ -125,6 +135,23 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
     }
   }, [])
 
+  const refreshProviderUsage = useCallback(async (agentId: AgentId) => {
+    setProviderUsageLoading((prev) => ({ ...prev, [agentId]: true }))
+    try {
+      const agentsApi = getAgentDock().agents as {
+        refreshUsage?: (agentId: AgentId) => Promise<ProviderUsageSnapshot>
+        getUsage?: (agentId: AgentId) => Promise<ProviderUsageSnapshot>
+      }
+      const loadUsage = agentsApi.refreshUsage ?? agentsApi.getUsage
+      if (loadUsage) {
+        const usage = await loadUsage.call(agentsApi, agentId)
+        setProviderUsages((prev) => ({ ...prev, [agentId]: usage }))
+      }
+    } finally {
+      setProviderUsageLoading((prev) => ({ ...prev, [agentId]: false }))
+    }
+  }, [])
+
   const refreshSettings = useCallback(async () => {
     const current = await getAgentDock().settings.get()
     setSettings(current)
@@ -147,7 +174,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
     void refreshAgents()
     void refreshSettings()
     void refreshCliSetup()
-  }, [refreshSessions, refreshAgents, refreshSettings, refreshCliSetup])
+    for (const agentId of AGENT_IDS) void refreshProviderUsage(agentId)
+  }, [refreshSessions, refreshAgents, refreshSettings, refreshCliSetup, refreshProviderUsage])
 
   // Automatic detection "when AgentDock starts": once both the persisted
   // dismissal flag and the first real status check have arrived, show the
@@ -202,9 +230,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
         return stillExists ? current : null
       })
       if (newSessionProjectId === id) setNewSessionProjectId(null)
+      if (compareProjectId === id) setCompareProjectId(null)
       await refreshSessions()
     },
-    [refreshSessions, sessionsByProject, newSessionProjectId]
+    [refreshSessions, sessionsByProject, newSessionProjectId, compareProjectId]
   )
 
   const toggleProjectCollapsed = useCallback(async (id: string) => {
@@ -247,12 +276,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
 
   const startNewSessionInProject = useCallback((projectId: string) => {
     setNewSessionProjectId(projectId)
+    setCompareProjectId(null)
+    setSelectedSessionId(null)
+  }, [])
+
+  const startCompareInProject = useCallback((projectId: string) => {
+    setCompareProjectId(projectId)
+    setNewSessionProjectId(null)
     setSelectedSessionId(null)
   }, [])
 
   const selectSession = useCallback((id: string | null) => {
     setSelectedSessionId(id)
-    if (id) setNewSessionProjectId(null)
+    if (id) {
+      setNewSessionProjectId(null)
+      setCompareProjectId(null)
+    }
   }, [])
 
   const value = useMemo<AppState>(
@@ -274,9 +313,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
       renameSession,
       newSessionProjectId,
       startNewSessionInProject,
+      compareProjectId,
+      startCompareInProject,
       agents,
       agentsLoading,
       refreshAgents,
+      providerUsages,
+      providerUsageLoading,
+      refreshProviderUsage,
       settings,
       updateSettings,
       settingsViewOpen,
@@ -311,9 +355,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }): R
       renameSession,
       newSessionProjectId,
       startNewSessionInProject,
+      compareProjectId,
+      startCompareInProject,
       agents,
       agentsLoading,
       refreshAgents,
+      providerUsages,
+      providerUsageLoading,
+      refreshProviderUsage,
       settings,
       updateSettings,
       settingsViewOpen,

@@ -109,6 +109,44 @@
   color: var(--color-text-secondary);
 }
 
+.ad-new-session__compare {
+  width: 100%;
+  margin-top: var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+}
+
+.ad-new-session__compare div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ad-new-session__compare strong {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.ad-new-session__compare span {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.ad-new-session__usage {
+  width: 100%;
+  margin-top: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .ad-spin {
   animation: ad-spin 0.7s linear infinite;
 }

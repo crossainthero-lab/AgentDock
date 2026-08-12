@@ -26,6 +26,8 @@ const api: AgentDockApi = {
     detect: (agentId) => ipcRenderer.invoke(IpcChannels.agentsDetect, agentId),
     setCustomPath: (agentId, customPath) => ipcRenderer.invoke(IpcChannels.agentsSetCustomPath, agentId, customPath),
     getCapabilities: (agentId) => ipcRenderer.invoke(IpcChannels.agentsGetCapabilities, agentId),
+    getUsage: (agentId) => ipcRenderer.invoke(IpcChannels.agentsGetUsage, agentId),
+    refreshUsage: (agentId) => ipcRenderer.invoke(IpcChannels.agentsRefreshUsage, agentId),
     browseExecutable: (agentId) => ipcRenderer.invoke(IpcChannels.agentsBrowseExecutable, agentId),
     testExecutable: (agentId, path) => ipcRenderer.invoke(IpcChannels.agentsTestExecutable, agentId, path)
   },
@@ -65,8 +67,8 @@ const api: AgentDockApi = {
     create: (input) => ipcRenderer.invoke(IpcChannels.sessionCreate, input),
     list: (workspaceId) => ipcRenderer.invoke(IpcChannels.sessionList, workspaceId),
     get: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionGet, sessionId),
-    sendPrompt: (sessionId, text, turnId, images, displayText) =>
-      ipcRenderer.invoke(IpcChannels.sessionSendPrompt, sessionId, text, turnId, images, displayText),
+    sendPrompt: (sessionId, text, turnId, images, displayText, options) =>
+      ipcRenderer.invoke(IpcChannels.sessionSendPrompt, sessionId, text, turnId, images, displayText, options),
     interrupt: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionInterrupt, sessionId),
     stop: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionStop, sessionId),
     delete: (sessionId) => ipcRenderer.invoke(IpcChannels.sessionDelete, sessionId),

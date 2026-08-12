@@ -3,6 +3,7 @@ import { IpcChannels } from '@shared/ipc-channels'
 import type { AgentDetection, AgentId } from '@shared/types'
 import { detectionService } from '../services/detection-service'
 import { settingsService } from '../services/settings-service'
+import { providerUsageService } from '../services/provider-usage-service'
 import { getAdapter } from '../agents/adapter-registry'
 import { AGENT_IDS, AGENT_DISPLAY_NAMES } from '@shared/types'
 import { normalizeExecutableOverride } from '../services/spawn-guard'
@@ -79,6 +80,16 @@ export function registerAgentIpc(window: BrowserWindow): void {
 
   ipcMain.handle(IpcChannels.agentsGetCapabilities, (_event, agentId: AgentId) => {
     return getAdapter(agentId).getCapabilities()
+  })
+
+  ipcMain.handle(IpcChannels.agentsGetUsage, (_event, agentId: AgentId) => {
+    const customPath = settingsService.get().agents[agentId].customPath
+    return providerUsageService.getUsage(agentId, customPath)
+  })
+
+  ipcMain.handle(IpcChannels.agentsRefreshUsage, (_event, agentId: AgentId) => {
+    const customPath = settingsService.get().agents[agentId].customPath
+    return providerUsageService.getUsage(agentId, customPath, true)
   })
 
   ipcMain.handle(IpcChannels.agentsBrowseExecutable, async (_event, agentId: AgentId) => {

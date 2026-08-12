@@ -1,7 +1,7 @@
 import type { BrowserWindow } from 'electron'
 import { safeHandle } from './ipc-utils'
 import { IpcChannels } from '@shared/ipc-channels'
-import type { CreateSessionInput } from '@shared/types'
+import type { CreateSessionInput, SendPromptOptions } from '@shared/types'
 import { sessionService } from '../services/session-service'
 import type { SessionEventEnvelope } from '@shared/events/agent-event'
 import type { TraceEventEnvelope } from '@shared/events/trace-event'
@@ -53,9 +53,17 @@ export function registerSessionIpc(window: BrowserWindow): void {
 
   safeHandle(
     IpcChannels.sessionSendPrompt,
-    async (_event, sessionId: string, text: string, turnId: string, images?: string[], displayText?: string) => {
+    async (
+      _event,
+      sessionId: string,
+      text: string,
+      turnId: string,
+      images?: string[],
+      displayText?: string,
+      options?: SendPromptOptions
+    ) => {
       ensureForwarding(window, sessionId)
-      await sessionService.sendPrompt(sessionId, text, turnId, images, displayText)
+      await sessionService.sendPrompt(sessionId, text, turnId, images, displayText, options)
     }
   )
 

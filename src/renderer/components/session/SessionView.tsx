@@ -14,7 +14,8 @@ import { TerminalDrawer } from '../drawers/TerminalDrawer'
 import './SessionView.css'
 
 export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Element | null {
-  const { agents, settings, updateSettings, selectSession, refreshSessions } = useAppState()
+  const { agents, settings, updateSettings, selectSession, refreshSessions, providerUsages, providerUsageLoading, refreshProviderUsage } =
+    useAppState()
   const conversation = useSessionConversation(sessionId)
   const [changesOpen, setChangesOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
@@ -63,9 +64,10 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
   useEffect(() => {
     if (wasBusyRef.current && !conversation.isBusy) {
       void refreshSessions()
+      if (conversation.session?.agentId) void refreshProviderUsage(conversation.session.agentId)
     }
     wasBusyRef.current = conversation.isBusy
-  }, [conversation.isBusy, refreshSessions])
+  }, [conversation.isBusy, conversation.session?.agentId, refreshProviderUsage, refreshSessions])
 
   const sessionWorkspaceId = conversation.session?.workspaceId ?? null
 
@@ -194,6 +196,8 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           currentReasoningEffort={conversation.currentReasoningEffort}
           effectivePermissionMode={conversation.effectivePermissionMode}
           showTerminal={showTerminal}
+          usage={providerUsages[session.agentId]}
+          usageLoading={providerUsageLoading[session.agentId]}
           onOpenChanges={() => {
             setTerminalOpen(false)
             setChangesOpen(true)
@@ -251,6 +255,9 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           }}
           onRunCommand={(commandId) => {
             conversation.runCommand(commandId).catch((err) => reportActionError('Run command', err))
+          }}
+          onRefreshUsage={() => {
+            void refreshProviderUsage(session.agentId)
           }}
           onOpenExternalTerminal={
             // Any structured-transport agent (Claude, Codex) has no in-app
