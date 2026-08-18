@@ -19,6 +19,7 @@ import type { AgentDetection } from '@shared/types'
 import type { ThreadEvent } from '@openai/codex-sdk'
 import { detectionService } from '../../services/detection-service'
 import type { ProcessExitInfo } from '../../services/pty-service'
+import { codexResponseImageService } from '../../services/codex-response-image-service'
 import { CodexAgentSdkTransport } from './CodexAgentSdkTransport'
 import { CodexEventMapper, createCodexMapperState, type CodexMapperState } from './CodexEventMapper'
 import type { AgentAdapter, AgentRunContext, AgentRunHandle } from '../agent-adapter'
@@ -37,6 +38,13 @@ class CodexRunHandle implements AgentRunHandle {
    *  setModel() can change it thereafter for this handle's lifetime. */
   private currentModel: string | null
   private currentReasoningEffort: string | null
+  /** Snapshot of this turn's thread's generated_images directory, taken on
+   *  the first event of the turn (before/independent of any image_gen tool
+   *  call that might happen during it) — null means "not yet taken this
+   *  turn". Diffed against the same directory at turn.completed to discover
+   *  Codex's built-in image-generation output, which is otherwise invisible
+   *  in this event stream (see codex-response-image-service.ts). */
+  private beforeGeneratedImages: Set<string> | null = null
   private readonly eventListeners = new Set<(event: AgentEvent) => void>()
   private readonly exitListeners = new Set<(info: ProcessExitInfo) => void>()
 
@@ -49,10 +57,11 @@ class CodexRunHandle implements AgentRunHandle {
     return this.transport?.isRunning ?? false
   }
 
-  send(prompt: string, turnId: string): void {
+  send(prompt: string, turnId: string, images?: string[]): void {
     this.userCausedExit = false
     this.currentTurnId = turnId
     this.mapperState = createCodexMapperState()
+    this.beforeGeneratedImages = null
 
     if (!this.transport) {
       const transport = new CodexAgentSdkTransport({
@@ -94,7 +103,7 @@ class CodexRunHandle implements AgentRunHandle {
     // matches, so it's correctly skipped rather than misattributed to
     // whatever turn is active now.
     const turnIdForThisLaunch = turnId
-    void this.transport.start(prompt).then((info) => {
+    void this.transport.start(prompt, images).then((info) => {
       if (this.currentTurnId === turnIdForThisLaunch && !this.mapperState.sawCompletion) {
         if (this.userCausedExit) {
           this.emit({ type: 'turn_cancelled', sessionId: this.ctx.session.id, turnId: this.currentTurnId })
@@ -109,7 +118,29 @@ class CodexRunHandle implements AgentRunHandle {
     })
   }
 
-  private handleMessage(msg: ThreadEvent): void {
+  private async handleMessage(msg: ThreadEvent): Promise<void> {
+    // Taken on the first event of the turn, before this event (or any other
+    // this turn) is processed — a resumed thread's directory may already
+    // contain prior turns' generated images, so this must happen before any
+    // chance of this turn's own image_gen call landing a new file there.
+    if (this.beforeGeneratedImages === null) {
+      this.beforeGeneratedImages = await codexResponseImageService.snapshotDir(this.capturedThreadId ?? this.ctx.nativeSessionId)
+    }
+
+    if (msg.type === 'turn.completed') {
+      const effectiveThreadId = this.capturedThreadId ?? this.ctx.nativeSessionId
+      const newImages = await codexResponseImageService.diffNewImages(effectiveThreadId, this.beforeGeneratedImages)
+      if (newImages.length > 0) {
+        this.emit({
+          type: 'response_artifacts',
+          sessionId: this.ctx.session.id,
+          turnId: this.currentTurnId,
+          messageId: `${this.currentTurnId}-artifacts`,
+          images: newImages
+        })
+      }
+    }
+
     const { events, state, capturedThreadId } = CodexEventMapper.mapEvent(msg, this.mapperState, this.ctx.session.id, this.currentTurnId)
     this.mapperState = state
     if (capturedThreadId) this.capturedThreadId = capturedThreadId

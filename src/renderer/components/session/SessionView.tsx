@@ -123,6 +123,7 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
   if (!workspace || !conversation.session) return null
 
   const session: Session = conversation.session
+  const attachmentBackend: 'codex' | 'antigravity' = session.agentId === 'antigravity' ? 'antigravity' : 'codex'
   const detection = agents.find((a) => a.agentId === session.agentId)
   const agentInstalled = detection?.installed ?? false
   const composerDisabled = !agentInstalled
@@ -257,15 +258,20 @@ export function SessionView({ sessionId }: { sessionId: string }): React.JSX.Ele
           }}
           onOpenTerminal={openTerminal}
           workspaceId={workspace.id}
+          sessionId={sessionId}
+          attachmentBackend={attachmentBackend}
         />
 
         <PromptComposer
           disabled={composerDisabled}
           disabledReason={composerDisabledReason}
           isRunning={conversation.isBusy}
-          onSend={(text) => {
+          imagesEnabled={session.agentId === 'codex' || session.agentId === 'antigravity'}
+          attachmentBackend={attachmentBackend}
+          sessionId={sessionId}
+          onSend={(text, images) => {
             setActionError(null)
-            conversation.sendPrompt(text).catch((err) => reportActionError('Send', err))
+            conversation.sendPrompt(text, images).catch((err) => reportActionError('Send', err))
           }}
           onInterrupt={() => {
             conversation.interrupt().catch((err) => reportActionError('Interrupt', err))

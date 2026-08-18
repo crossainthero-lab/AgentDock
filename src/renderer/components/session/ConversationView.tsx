@@ -51,6 +51,12 @@ interface ConversationViewProps {
   /** Needed to resolve local image/link paths in assistant Markdown — null
    *  when there's no open workspace. */
   workspaceId: string | null
+  /** Needed to resolve image attachments (see AttachmentThumbnail) — null
+   *  only while no session is open. */
+  sessionId: string | null
+  /** Which agent's attachment IPC namespace to resolve images through —
+   *  defaults to 'codex' so existing behavior is unaffected. */
+  attachmentBackend?: 'codex' | 'antigravity'
 }
 
 export function ConversationView({
@@ -61,7 +67,9 @@ export function ConversationView({
   onRespondInteraction,
   onRetryMessage,
   onOpenTerminal,
-  workspaceId
+  workspaceId,
+  sessionId,
+  attachmentBackend = 'codex'
 }: ConversationViewProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const timeline = buildTimeline(items)
@@ -98,13 +106,26 @@ export function ConversationView({
                 key={item.id}
                 role="user"
                 text={item.text}
+                images={item.images}
+                sessionId={sessionId}
+                attachmentBackend={attachmentBackend}
                 deliveryState={item.deliveryState}
                 onRetry={item.deliveryState === 'failed' ? () => onRetryMessage(item.id) : undefined}
               />
             )
           }
           if (item.kind === 'assistant') {
-            return <MessageBubble key={item.id} role="assistant" text={item.text} workspaceId={workspaceId} />
+            return (
+              <MessageBubble
+                key={item.id}
+                role="assistant"
+                text={item.text}
+                workspaceId={workspaceId}
+                responseImages={item.responseImages}
+                sessionId={sessionId}
+                attachmentBackend={attachmentBackend}
+              />
+            )
           }
           if (item.kind === 'system') {
             return <MessageBubble key={item.id} role={item.role} text={item.text} />

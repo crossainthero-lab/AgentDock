@@ -87,12 +87,15 @@ function claudeModelDisplay(
   return turnLikelyActive ? { label: 'Detecting model…', selectedId: null } : { label: 'Claude — Unknown model', selectedId: null }
 }
 
-/** Resolves the Model menu's trigger text for a Codex session. Unlike
- *  Claude, Codex's JSON stream never echoes the active model back — what
- *  AgentDock knows is exactly what it told Codex to use (see CodexAdapter's
- *  model_info emission), so this only ever shows a real selected model or
- *  the generic placeholder — never a guess at what Codex's own config
- *  default might be on this machine. */
+/** Resolves the Model menu's trigger text for a Codex or Antigravity
+ *  session. Unlike Claude, neither transport ever echoes the active model
+ *  back on its own — what AgentDock knows is exactly what it told the CLI
+ *  to use (see CodexAdapter's/AntigravityAdapter's model_info emission), so
+ *  this only ever shows a real selected model or the generic placeholder —
+ *  never a guess at what the CLI's own config default might be on this
+ *  machine. Model ids for both agents are exact-equality matches
+ *  (Antigravity's ids are the literal display strings it expects on
+ *  `--model`), so one helper serves both. */
 function codexModelDisplay(currentModel: string | null, models: AgentModelOption[]): { label: string; selectedId: string | null } {
   if (!currentModel) return { label: 'Model', selectedId: null }
   const match = models.find((m) => m.id === currentModel)
@@ -163,9 +166,10 @@ export function SessionHeader({
   const [showLegacyModels, setShowLegacyModels] = useState(false)
   const isClaude = session.agentId === 'claude-code'
   const isCodex = session.agentId === 'codex'
+  const isAntigravity = session.agentId === 'antigravity'
   const modelDisplay = isClaude
     ? claudeModelDisplay(currentModel, capabilities?.models ?? [], session.status)
-    : isCodex
+    : isCodex || isAntigravity
       ? codexModelDisplay(currentModel, capabilities?.models ?? [])
       : { label: 'Model', selectedId: null }
   const displayedPermissionMode = effectivePermissionMode ?? currentPermissionMode
@@ -210,7 +214,7 @@ export function SessionHeader({
           label="Model"
           items={isCodex ? codexModelMenuItems : (capabilities?.models ?? [])}
           selectedId={modelDisplay.selectedId}
-          selectedLabel={isClaude || isCodex ? modelDisplay.label : undefined}
+          selectedLabel={isClaude || isCodex || isAntigravity ? modelDisplay.label : undefined}
           onSelect={onSetModel}
           disabled={!capabilities?.supportsLiveModelSwitch}
         />

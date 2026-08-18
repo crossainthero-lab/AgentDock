@@ -50,8 +50,8 @@ export interface AgentTurn {
 }
 
 export type ChatItem =
-  | { kind: 'user'; id: string; text: string; deliveryState: DeliveryState; createdAt: number }
-  | { kind: 'assistant'; id: string; text: string; createdAt: number }
+  | { kind: 'user'; id: string; text: string; images?: string[]; deliveryState: DeliveryState; createdAt: number }
+  | { kind: 'assistant'; id: string; text: string; responseImages?: string[]; createdAt: number }
   | { kind: 'system'; id: string; role: 'system' | 'error'; text: string; createdAt: number }
   | {
       kind: 'tool-activity'
@@ -147,10 +147,10 @@ function sessionMessageToChatItem(m: SessionMessage): ChatItem | null {
   const content: MessageContent = m.content
   switch (content.kind) {
     case 'text':
-      if (m.role === 'user') return { kind: 'user', id: m.id, text: content.text, deliveryState: 'sent', createdAt }
+      if (m.role === 'user') return { kind: 'user', id: m.id, text: content.text, images: content.images, deliveryState: 'sent', createdAt }
       if (m.role === 'error') return { kind: 'system', id: m.id, role: 'error', text: content.text, createdAt }
       if (m.role === 'system') return { kind: 'system', id: m.id, role: 'system', text: content.text, createdAt }
-      return { kind: 'assistant', id: m.id, text: content.text, createdAt }
+      return { kind: 'assistant', id: m.id, text: content.text, responseImages: content.responseImages, createdAt }
     case 'activity':
       return {
         kind: 'tool-activity',
@@ -204,6 +204,7 @@ export interface BeginSendParams {
   userMessageId: string
   turnId: string
   text: string
+  images?: string[]
   agentDisplayName: string
 }
 
@@ -217,7 +218,14 @@ export function beginSend(state: AgentEventReducerState, params: BeginSendParams
     status: 'submitted',
     startedAt: now
   }
-  const userItem: ChatItem = { kind: 'user', id: params.userMessageId, text: params.text, deliveryState: 'sending', createdAt: now }
+  const userItem: ChatItem = {
+    kind: 'user',
+    id: params.userMessageId,
+    text: params.text,
+    images: params.images,
+    deliveryState: 'sending',
+    createdAt: now
+  }
   return {
     ...state,
     items: [...state.items, userItem],
@@ -379,6 +387,19 @@ function applyEvent(state: AgentEventReducerState, event: AgentEvent, now: numbe
       const id = scopedId(turn.id, event.messageId)
       if (hasItem(state.items, id)) return state
       const item: ChatItem = { kind: 'assistant', id, text: event.text, createdAt: now }
+      return { ...state, items: [...state.items, item] }
+    }
+
+    // A new bubble, not merged into the preceding assistant_completed item —
+    // discovered only after that item already exists (a directory diff at
+    // turn.completed, well after the text arrived), and items are addressed
+    // by id/found-or-created, never mutated after the fact once inserted
+    // (see the module comment's MessageAssembler model) — a fresh id keeps
+    // this consistent with that rule instead of special-casing an update.
+    case 'response_artifacts': {
+      const id = scopedId(turn.id, event.messageId)
+      if (hasItem(state.items, id)) return state
+      const item: ChatItem = { kind: 'assistant', id, text: '', responseImages: event.images, createdAt: now }
       return { ...state, items: [...state.items, item] }
     }
 

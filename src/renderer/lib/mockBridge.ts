@@ -132,6 +132,27 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       async refreshModelCatalog() {
         return { models: [], source: 'empty' as const, fetchedAt: null, error: 'Not available in browser preview.' }
+      },
+      async browseAttachments() {
+        return []
+      },
+      async saveAttachmentFromPath() {
+        return { error: 'Not available in browser preview.' }
+      },
+      async saveAttachmentFromDataUrl() {
+        return { error: 'Not available in browser preview.' }
+      },
+      async resolveAttachment() {
+        return { error: 'Not available in browser preview.' }
+      },
+      async resolveResponseImage() {
+        return { error: 'Not available in browser preview.' }
+      },
+      async revealResponseImage() {
+        return { ok: false, error: 'Not available in the browser preview.' }
+      },
+      async openResponseImageExternally() {
+        return { ok: false, error: 'Not available in the browser preview.' }
       }
     },
     claude: {
@@ -140,6 +161,29 @@ if (typeof window !== 'undefined' && !window.agentDock) {
       },
       async refreshModelCatalog() {
         return []
+      }
+    },
+    antigravity: {
+      async browseAttachments() {
+        return []
+      },
+      async saveAttachmentFromPath() {
+        return { error: 'Not available in browser preview.' }
+      },
+      async saveAttachmentFromDataUrl() {
+        return { error: 'Not available in browser preview.' }
+      },
+      async resolveAttachment() {
+        return { error: 'Not available in browser preview.' }
+      },
+      async resolveResponseImage() {
+        return { error: 'Not available in browser preview.' }
+      },
+      async revealResponseImage() {
+        return { ok: false, error: 'Not available in the browser preview.' }
+      },
+      async openResponseImageExternally() {
+        return { ok: false, error: 'Not available in the browser preview.' }
       }
     },
     session: {

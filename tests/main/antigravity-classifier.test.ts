@@ -41,7 +41,8 @@ describe('AntigravityClassifier (real captures from agy 1.1.1/1.1.2, -i <prompt>
     )
     expect(events).toEqual([
       { type: 'activity', label: 'Thinking', elapsedMs: 6000 },
-      { type: 'assistant_message', text: 'HELLO CAPTURE TEST.' }
+      { type: 'assistant_message', text: 'HELLO CAPTURE TEST.' },
+      { type: 'turn_ready' }
     ])
   })
 
@@ -90,7 +91,66 @@ describe('AntigravityClassifier (real captures from agy 1.1.1/1.1.2, -i <prompt>
           '### Summary of Work Done:\n' +
           '• Created the file  capture-test.txt  in the scratch directory.\n' +
           '• Added the word "hi" to the file as requested.'
-      }
+      },
+      { type: 'turn_ready' }
+    ])
+  })
+
+  it('does not emit turn_ready while the busy footer ("esc to cancel") is showing, only once idle ("? for shortcuts")', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.classify(snapshot(['> go']))
+    const busy = classifier.classify(snapshot(['> go', '', 'esc to cancel                    Gemini 3.1 Pro (High)']))
+    expect(busy.some((e) => e.type === 'turn_ready')).toBe(false)
+
+    const idle = classifier.classify(snapshot(['> go', '', 'reply text', '? for shortcuts    Gemini 3.1 Pro (High)']))
+    expect(idle).toContainEqual({ type: 'turn_ready' })
+  })
+
+  it('emits turn_ready only once per turn even across repeated idle snapshots, and again after beginTurn() for a new turn', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.classify(snapshot(['> go']))
+    const first = classifier.classify(snapshot(['> go', 'reply', '? for shortcuts    Gemini 3.1 Pro (High)']))
+    expect(first).toContainEqual({ type: 'turn_ready' })
+
+    // Screen stays idle (nothing new to send) — must not re-fire.
+    const stillIdle = classifier.classify(snapshot(['> go', 'reply', '? for shortcuts    Gemini 3.1 Pro (High)']))
+    expect(stillIdle.some((e) => e.type === 'turn_ready')).toBe(false)
+
+    classifier.beginTurn()
+    const second = classifier.classify(snapshot(['> go', 'reply', '> second prompt', 'reply2', '? for shortcuts    Gemini 3.1 Pro (High)']))
+    expect(second).toContainEqual({ type: 'turn_ready' })
+  })
+
+  it('suppresses the real captured CSAT survey toast instead of leaking it into the chat as prose', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.classify(snapshot(['> go']))
+    const events = classifier.classify(
+      snapshot([
+        '> go',
+        '',
+        "How's the CLI experience so far? Help us improve:",
+        '[1] Good  [2] Fine  [3] Bad  [0] Skip'
+      ])
+    )
+    expect(events.some((e) => e.type === 'assistant_message')).toBe(false)
+  })
+
+  it('suppresses the busy-state footer line ("esc to cancel ... <model>") instead of leaking it into the reply', () => {
+    const classifier = new AntigravityClassifier()
+    classifier.classify(snapshot(['> go']))
+    const events = classifier.classify(
+      snapshot(['> go', 'a real reply', 'esc to cancel                                               Gemini 3.1 Pro (High)'])
+    )
+    expect(events).toContainEqual({ type: 'assistant_message', text: 'a real reply' })
+  })
+
+  it('detects the real captured Antigravity "not signed in" auth message, not the transient spinner line after it', () => {
+    const classifier = new AntigravityClassifier()
+    const events = classifier.classify(
+      snapshot(['Welcome to the Antigravity CLI. You are currently not signed in.', '', '⣾  Signing in...'])
+    )
+    expect(events).toEqual([
+      { type: 'authentication_required', message: 'Welcome to the Antigravity CLI. You are currently not signed in.' }
     ])
   })
 

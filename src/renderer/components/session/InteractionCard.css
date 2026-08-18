@@ -13,11 +13,26 @@
 
 .ad-interaction-card__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-primary);
+}
+
+.ad-interaction-card__header svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* A prompt can be multi-line (e.g. Antigravity's real "Requesting
+ * permission for: <command>\nDo you want to proceed?" shape) — preserve
+ * the line breaks and wrap long single lines instead of one squeezed run-on
+ * line. A short single-line prompt (Claude/Codex) renders identically to
+ * before this rule existed. */
+.ad-interaction-card__header span {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ad-interaction-card__detail {

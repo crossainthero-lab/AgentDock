@@ -20,6 +20,24 @@ export const IpcChannels = {
   claudeModelCatalogGet: 'claude:modelCatalog:get',
   claudeModelCatalogRefresh: 'claude:modelCatalog:refresh',
 
+  codexAttachmentsBrowse: 'codex:attachments:browse',
+  codexAttachmentsSaveFromPath: 'codex:attachments:saveFromPath',
+  codexAttachmentsSaveFromDataUrl: 'codex:attachments:saveFromDataUrl',
+  codexAttachmentsResolve: 'codex:attachments:resolve',
+
+  codexResponseImageResolve: 'codex:responseImage:resolve',
+  codexResponseImageReveal: 'codex:responseImage:reveal',
+  codexResponseImageOpenExternally: 'codex:responseImage:openExternally',
+
+  antigravityAttachmentsBrowse: 'antigravity:attachments:browse',
+  antigravityAttachmentsSaveFromPath: 'antigravity:attachments:saveFromPath',
+  antigravityAttachmentsSaveFromDataUrl: 'antigravity:attachments:saveFromDataUrl',
+  antigravityAttachmentsResolve: 'antigravity:attachments:resolve',
+
+  antigravityResponseImageResolve: 'antigravity:responseImage:resolve',
+  antigravityResponseImageReveal: 'antigravity:responseImage:reveal',
+  antigravityResponseImageOpenExternally: 'antigravity:responseImage:openExternally',
+
   sessionCreate: 'session:create',
   sessionList: 'session:list',
   sessionGet: 'session:get',

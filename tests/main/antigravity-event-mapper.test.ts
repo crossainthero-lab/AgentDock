@@ -101,4 +101,75 @@ describe('AntigravityEventMapper — completion is never fabricated from a timeo
     const { events } = map([{ type: 'error', message: 'process crashed' }])
     expect(events).toEqual([{ type: 'turn_failed', sessionId: SESSION_ID, turnId: TURN_ID, reason: 'process crashed' }])
   })
+
+  it('CRITICAL: turn_ready (the live, process-stays-alive completion signal) maps to turn_completed', () => {
+    const { events } = map([{ type: 'turn_ready' }])
+    expect(events).toEqual([{ type: 'turn_completed', sessionId: SESSION_ID, turnId: TURN_ID }])
+  })
+})
+
+describe('AntigravityEventMapper — response images from real Create/Edit tool-call lines', () => {
+  it('a Create(...) tool call naming an image path flushes a response_artifacts event right before turn_completed', () => {
+    const { events } = map([
+      { type: 'tool_activity', label: 'Create(C:/scratch/chart.png)', status: 'done' },
+      { type: 'turn_ready' }
+    ])
+    const artifactsIndex = events.findIndex((e) => e.type === 'response_artifacts')
+    const completedIndex = events.findIndex((e) => e.type === 'turn_completed')
+    expect(artifactsIndex).toBeGreaterThanOrEqual(0)
+    expect(completedIndex).toBeGreaterThan(artifactsIndex)
+    expect(events[artifactsIndex]).toEqual({
+      type: 'response_artifacts',
+      sessionId: SESSION_ID,
+      turnId: TURN_ID,
+      messageId: `${TURN_ID}:artifacts`,
+      images: ['C:/scratch/chart.png']
+    })
+  })
+
+  it('an Edit(...) tool call naming an image path is also treated as a response image', () => {
+    const { events } = map([{ type: 'tool_activity', label: 'Edit(assets/logo.png)', status: 'done' }, { type: 'turn_ready' }])
+    expect(events).toContainEqual({
+      type: 'response_artifacts',
+      sessionId: SESSION_ID,
+      turnId: TURN_ID,
+      messageId: `${TURN_ID}:artifacts`,
+      images: ['assets/logo.png']
+    })
+  })
+
+  it('a non-image Create(...) (e.g. a .txt file) is not treated as a response image', () => {
+    const { events } = map([{ type: 'tool_activity', label: 'Create(notes.txt)', status: 'done' }, { type: 'turn_ready' }])
+    expect(events.some((e) => e.type === 'response_artifacts')).toBe(false)
+  })
+
+  it('a failed Create(...) is not treated as a response image (the file may not genuinely exist)', () => {
+    const { events } = map([{ type: 'tool_activity', label: 'Create(broken.png)', status: 'error' }, { type: 'turn_ready' }])
+    expect(events.some((e) => e.type === 'response_artifacts')).toBe(false)
+  })
+
+  it('a Read(...) of an existing image is not treated as Antigravity producing an image', () => {
+    const { events } = map([{ type: 'tool_activity', label: 'Read(existing.png)', status: 'done' }, { type: 'turn_ready' }])
+    expect(events.some((e) => e.type === 'response_artifacts')).toBe(false)
+  })
+
+  it('multiple images created in one turn are flushed together, in order, on one message', () => {
+    const { events } = map([
+      { type: 'tool_activity', label: 'Create(a.png)', status: 'done' },
+      { type: 'tool_activity', label: 'Create(b.png)', status: 'done' },
+      { type: 'turn_ready' }
+    ])
+    expect(events).toContainEqual({
+      type: 'response_artifacts',
+      sessionId: SESSION_ID,
+      turnId: TURN_ID,
+      messageId: `${TURN_ID}:artifacts`,
+      images: ['a.png', 'b.png']
+    })
+  })
+
+  it('no response_artifacts event at all when nothing image-shaped was created this turn', () => {
+    const { events } = map([{ type: 'assistant_message', text: 'All done.' }, { type: 'turn_ready' }])
+    expect(events.some((e) => e.type === 'response_artifacts')).toBe(false)
+  })
 })

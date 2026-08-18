@@ -28,6 +28,17 @@ const ARROW_FOOTER = /(↑\s*\/\s*↓|arrow keys?)\s*.*(navigate|select)/i
 // not just a bare question mark at the very end of the line.
 const QUESTION_LINE = /\?\s*(\([^)]*\))?\s*$/
 const TAIL_WINDOW = 14
+// Real captured Antigravity command-permission prompt shape:
+//   Requesting permission for:
+//      echo hello-from-shell
+//
+//   Do you want to proceed?
+//   > 1. Yes
+// — the command/target being requested lives on the line(s) between this
+// label and the question, and is lost entirely if only the question line
+// is used as the prompt (the user would see "Do you want to proceed?"
+// with no indication of what for).
+const REQUEST_LABEL_LINE = /^(Requesting (permission|approval) for)[:.]?\s*$/i
 
 function lastNonEmpty(lines: string[]): string | null {
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -37,8 +48,16 @@ function lastNonEmpty(lines: string[]): string | null {
 }
 
 function findPromptLine(tail: string[], fallback: string): string {
-  const questionLine = [...tail].reverse().find((l) => QUESTION_LINE.test(l.trim()))
-  if (questionLine) return questionLine.trim()
+  const questionIdx = findLastIndex(tail, (l) => QUESTION_LINE.test(l.trim()))
+  const requestIdx = findLastIndex(tail, (l) => REQUEST_LABEL_LINE.test(l.trim()))
+  if (requestIdx !== -1 && questionIdx !== -1 && requestIdx < questionIdx) {
+    const detail = tail
+      .slice(requestIdx, questionIdx + 1)
+      .map((l) => l.trim())
+      .filter(Boolean)
+    if (detail.length > 1) return detail.join('\n')
+  }
+  if (questionIdx !== -1) return tail[questionIdx].trim()
   return lastNonEmpty(tail) ?? fallback
 }
 
@@ -148,20 +167,38 @@ const AUTH_PATTERNS = [
   /authentication required/i,
   /please\s+log\s*in/i,
   /run\s+`?\/login/i,
-  /you('re| are) not logged in/i
+  /you('re| are) not logged in/i,
+  // Real captured Antigravity wording, confirmed live: "Welcome to the
+  // Antigravity CLI. You are currently not signed in." — deliberately a
+  // separate pattern from "not logged in" above rather than a wording
+  // tweak to it, since both are genuinely distinct real phrasings across
+  // different CLIs and either could change independently.
+  /you('re| are) (currently )?not signed in/i
 ]
 
 /** Generic auth-prompt heuristic shared by every classifier — none of these
  *  CLIs' login flows were safe to trigger against a real authenticated
  *  account during development (it would sign the user out), so this is
- *  pattern-based rather than captured-and-verified like the other detectors. */
+ *  pattern-based rather than captured-and-verified like the other detectors.
+ *  Confirmed live for Antigravity specifically: a real "not signed in"
+ *  screen is immediately followed by an animated "Signing in…" spinner
+ *  line, which — being the actual last non-blank line most of the time —
+ *  would otherwise become the message shown to the user instead of the
+ *  actual informative sentence. Returns the real line that matched instead
+ *  of blindly the last non-blank one. */
 export function detectAuthRequired(lines: string[]): string | null {
   const tail = lines.slice(-TAIL_WINDOW)
   const joined = tail.join('\n')
   for (const pattern of AUTH_PATTERNS) {
-    if (pattern.test(joined)) {
-      return lastNonEmpty(tail) ?? 'This agent needs you to authenticate.'
-    }
+    if (!pattern.test(joined)) continue
+    // Prefer the specific line that matched (a real captured Antigravity
+    // "not signed in" screen is immediately followed by an animated
+    // "Signing in…" spinner line, which — being the actual last non-blank
+    // line — would otherwise become the displayed message instead of the
+    // real informative sentence). Falls back to the last non-blank line
+    // for a pattern whose match genuinely spans multiple lines.
+    const matchedLine = [...tail].reverse().find((l) => pattern.test(l))
+    return (matchedLine ?? lastNonEmpty(tail))?.trim() || 'This agent needs you to authenticate.'
   }
   return null
 }

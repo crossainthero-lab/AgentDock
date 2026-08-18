@@ -37,6 +37,28 @@ const ECHO_LINE = /^>\s?/
 const FOOTER_LINE = /^\?\s*for shortcuts\b/i
 const THOUGHT_LINE = /^▸\s*Thought for (\d+)s/
 const TOOL_ACTIVITY_LINE = /^●\s*([A-Za-z][\w]*)\(([^)]*)\)(?:\s*\(ctrl\+o to expand\))?\s*$/
+// Real captured contrast, confirmed live: the status-bar footer reads
+// "esc to cancel ... <model>" while a turn is in flight, and switches to
+// "? for shortcuts" once agy is genuinely idle and ready for the next
+// prompt — the only observed textual signal that distinguishes "done" from
+// "still working" for a live (not-yet-exited) interactive session.
+const IDLE_READY_FOOTER = /\?\s*for shortcuts\b/i
+const BUSY_FOOTER = /esc to cancel\b/i
+// The busy-state status line itself ("esc to cancel ... <model>") — real
+// captured chrome that, unlike the idle footer above, was never suppressed
+// from prose at all: nothing in the original suppression rules recognized
+// it, so it could leak straight into an assistant message's text.
+const BUSY_FOOTER_LINE = /esc to cancel\b.*$/i
+// Real captured CSAT survey toast (appears unprompted, mid-session, unlike
+// every other recognized shape here) — "[N] Label" bracket format, not the
+// "N. Label" shape TerminalInteractionDetector's menus expect, so it was
+// invisible to interaction detection too and would otherwise leak into the
+// chat as if it were part of the model's own reply. Deliberately suppressed
+// rather than auto-answered: there's no confirmed evidence it actually
+// blocks input (it may self-dismiss), and sending an unprompted keystroke
+// into a live conversation on unconfirmed behavior risks it being
+// interpreted as real chat content instead.
+const CSAT_SURVEY_LINE = /how'?s the cli experience so far|\[\d\]\s*(good|fine|bad|skip)\b/i
 
 export class AntigravityClassifier {
   private processedLineCount = 0
@@ -51,12 +73,27 @@ export class AntigravityClassifier {
    *  the very next non-blank line is that same status's fixed subtitle, not
    *  a real reply, so it's swallowed once rather than shown as prose. */
   private expectingThoughtLabel = false
+  /** True once `turn_ready` has already been emitted for the turn currently
+   *  in flight — without this, every subsequent idle snapshot (there can be
+   *  many, since the screen stays unchanged while waiting for the next
+   *  prompt) would re-emit it. Cleared by beginTurn(), not reset() — this is
+   *  turn-scoped state, not process-lifetime state. */
+  private turnReadySignaled = false
 
   reset(): void {
     this.processedLineCount = 0
     this.activePromptKey = null
     this.sawFirstEcho = false
     this.expectingThoughtLabel = false
+    this.turnReadySignaled = false
+  }
+
+  /** Call once per turn, right before writing the new prompt into the PTY —
+   *  distinct from reset() (process-lifetime state: banner suppression,
+   *  scan position) because the live PTY persists across turns while this
+   *  flag must not. */
+  beginTurn(): void {
+    this.turnReadySignaled = false
   }
 
   classify(snapshot: ScreenSnapshot): ClassifiedScreenEvent[] {
@@ -97,6 +134,19 @@ export class AntigravityClassifier {
     this.processedLineCount = lines.length
     this.emitContent(newLines, events)
 
+    // Checked against the live status-bar footer (last couple of rows),
+    // independent of the scrollback-position bookkeeping above — this is a
+    // fixed-position redraw, not scrollback content, and must be re-checked
+    // every snapshot so the busy->idle transition is caught whichever
+    // snapshot it lands in.
+    if (this.sawFirstEcho && !this.turnReadySignaled) {
+      const footerTail = lines.slice(-3).join('\n')
+      if (IDLE_READY_FOOTER.test(footerTail) && !BUSY_FOOTER.test(footerTail)) {
+        this.turnReadySignaled = true
+        events.push({ type: 'turn_ready' })
+      }
+    }
+
     return events
   }
 
@@ -118,6 +168,7 @@ export class AntigravityClassifier {
 
       if (trimmed === '') continue
       if (SEPARATOR_LINE.test(trimmed) || FOOTER_LINE.test(trimmed) || ECHO_LINE.test(trimmed)) continue
+      if (BUSY_FOOTER_LINE.test(trimmed) || CSAT_SURVEY_LINE.test(trimmed)) continue
 
       const thoughtMatch = trimmed.match(THOUGHT_LINE)
       if (thoughtMatch) {

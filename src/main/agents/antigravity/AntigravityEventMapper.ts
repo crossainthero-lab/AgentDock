@@ -7,6 +7,24 @@
 import type { AgentEvent } from '@shared/events/agent-event'
 import type { ClassifiedScreenEvent } from './classified-event'
 
+// Real captured tool-call shapes, confirmed live: "● Create(C:/scratch/
+// capture-test.txt) (ctrl+o to expand)" and the equivalent for Edit —
+// Antigravity has no dedicated generated-image directory the way Codex
+// does (confirmed: no such thing was ever found), so a genuine response
+// image is just a file the model itself created/edited in the workspace,
+// named in its own tool-call line. Only Create/Edit are treated as
+// candidates — a Read or other tool naming an image path isn't Antigravity
+// producing an image, just looking at an existing one.
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp'])
+function extractCreatedOrEditedImagePath(label: string): string | null {
+  const match = label.match(/^(?:Create|Edit)\(([^)]+)\)$/)
+  if (!match) return null
+  const path = match[1].trim()
+  const dot = path.lastIndexOf('.')
+  const ext = dot === -1 ? '' : path.slice(dot).toLowerCase()
+  return IMAGE_EXTENSIONS.has(ext) ? path : null
+}
+
 export interface AntigravityMapperState {
   /** Set lazily on the first classified assistant_message this turn — every
    *  later one this same turn appends as another delta to it, deliberately
@@ -20,10 +38,16 @@ export interface AntigravityMapperState {
    *  than adding another. */
   heartbeatActivityId: string | null
   toolActivityCounter: number
+  /** Image paths discovered from real Create/Edit tool-call lines so far
+   *  this turn, in the order Antigravity produced them — flushed as one
+   *  response_artifacts event when the turn resolves (turn_ready/
+   *  session_complete), the same "discovered during the turn, emitted once
+   *  at completion" shape Codex's generated-image work uses. */
+  collectedImagePaths: string[]
 }
 
 export function createAntigravityMapperState(): AntigravityMapperState {
-  return { messageId: null, heartbeatActivityId: null, toolActivityCounter: 0 }
+  return { messageId: null, heartbeatActivityId: null, toolActivityCounter: 0, collectedImagePaths: [] }
 }
 
 export const AntigravityEventMapper = {
@@ -75,6 +99,10 @@ export const AntigravityEventMapper = {
             tool,
             status: classifiedEvent.status === 'error' ? 'error' : 'done'
           })
+          if (classifiedEvent.status !== 'error') {
+            const imagePath = extractCreatedOrEditedImagePath(classifiedEvent.label)
+            if (imagePath && !state.collectedImagePaths.includes(imagePath)) state.collectedImagePaths.push(imagePath)
+          }
           break
         }
 
@@ -119,7 +147,30 @@ export const AntigravityEventMapper = {
           events.push({ ...base, type: 'turn_failed', reason: classifiedEvent.message })
           break
 
+        case 'turn_ready':
+          // The primary, live completion signal (see classified-event.ts's
+          // doc comment) — fires while the process is still running, for
+          // every turn including the first. Any images discovered from
+          // real Create/Edit tool calls this turn are flushed first, so
+          // they land on their own message right before the turn resolves.
+          if (state.collectedImagePaths.length > 0) {
+            events.push({ ...base, type: 'response_artifacts', messageId: `${turnId}:artifacts`, images: [...state.collectedImagePaths] })
+            state.collectedImagePaths = []
+          }
+          events.push({ ...base, type: 'turn_completed' })
+          break
+
         case 'session_complete':
+          // A safety-net fallback only: the process actually exiting.
+          // exitCode 0 here means the process ended (e.g. the user closed
+          // it) without turn_ready ever having fired for the in-flight turn
+          // — still resolve it as complete rather than leaving it stuck.
+          // isForActiveTurn silently drops this if turn_ready already
+          // completed the turn, so this never double-fires a bubble.
+          if (classifiedEvent.exitCode === 0 && state.collectedImagePaths.length > 0) {
+            events.push({ ...base, type: 'response_artifacts', messageId: `${turnId}:artifacts`, images: [...state.collectedImagePaths] })
+            state.collectedImagePaths = []
+          }
           events.push(
             classifiedEvent.exitCode === 0
               ? { ...base, type: 'turn_completed' }

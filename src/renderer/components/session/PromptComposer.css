@@ -19,6 +19,37 @@
 .ad-composer__box--disabled {
   opacity: 0.6;
 }
+.ad-composer__box--drag {
+  border-color: var(--color-accent);
+  border-style: dashed;
+}
+
+.ad-composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0 0;
+}
+
+.ad-composer__attach-error {
+  max-width: 760px;
+  margin: 0 auto var(--space-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+}
+.ad-composer__attach-error button {
+  color: inherit;
+  text-decoration: underline;
+  flex-shrink: 0;
+}
 
 .ad-composer__box textarea {
   width: 100%;
@@ -42,6 +73,30 @@
   align-items: center;
   justify-content: space-between;
   padding: 4px 2px 4px 0;
+}
+
+.ad-composer__toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ad-composer__attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--color-text-tertiary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.ad-composer__attach:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+}
+.ad-composer__attach:disabled {
+  opacity: 0.4;
 }
 
 .ad-composer__hint {
